@@ -12,7 +12,7 @@ interface UseTournamentsResult {
   tournaments: Tournament[];
   loading: boolean;
   error: Error | null;
-  refetch: () => Promise<void>;
+  refetch: (forceRefresh?: boolean) => Promise<void>;
 }
 
 /**
@@ -23,11 +23,11 @@ export function useTournaments(): UseTournamentsResult {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<Error | null>(null);
 
-  const fetchTournaments = async () => {
+  const fetchTournaments = async (forceRefresh = false) => {
     try {
       setLoading(true);
       setError(null);
-      const data = await getTournaments();
+      const data = await getTournaments(forceRefresh);
       setTournaments(data);
     } catch (err) {
       setError(err instanceof Error ? err : new Error('Failed to fetch tournaments'));

@@ -1,10 +1,8 @@
 /**
  * Database Types
- * 
+ *
  * TypeScript types generated from Supabase database schema.
  * These types should match the database schema exactly.
- * 
- * To regenerate: Use Supabase CLI or manually update when schema changes.
  */
 
 export type Json =
@@ -143,6 +141,7 @@ export interface Database {
           id: string;
           venmo_link: string | null;
           display_name: string | null;
+          is_admin: boolean;
           created_at: string;
           updated_at: string;
         };
@@ -150,6 +149,7 @@ export interface Database {
           id: string;
           venmo_link?: string | null;
           display_name?: string | null;
+          is_admin?: boolean;
           created_at?: string;
           updated_at?: string;
         };
@@ -157,6 +157,7 @@ export interface Database {
           id?: string;
           venmo_link?: string | null;
           display_name?: string | null;
+          is_admin?: boolean;
           created_at?: string;
           updated_at?: string;
         };
@@ -170,7 +171,11 @@ export interface Database {
           draft_status: 'not_started' | 'in_progress' | 'completed' | 'canceled';
           draft_started_at: string | null;
           draft_completed_at: string | null;
+          draft_scheduled_at: string | null;
           pick_deadline: string | null;
+          is_public: boolean;
+          invite_code: string | null;
+          invite_expires_at: string | null;
           created_at: string;
           updated_at: string;
         };
@@ -182,7 +187,11 @@ export interface Database {
           draft_status?: 'not_started' | 'in_progress' | 'completed' | 'canceled';
           draft_started_at?: string | null;
           draft_completed_at?: string | null;
+          draft_scheduled_at?: string | null;
           pick_deadline?: string | null;
+          is_public?: boolean;
+          invite_code?: string | null;
+          invite_expires_at?: string | null;
           created_at?: string;
           updated_at?: string;
         };
@@ -194,7 +203,11 @@ export interface Database {
           draft_status?: 'not_started' | 'in_progress' | 'completed' | 'canceled';
           draft_started_at?: string | null;
           draft_completed_at?: string | null;
+          draft_scheduled_at?: string | null;
           pick_deadline?: string | null;
+          is_public?: boolean;
+          invite_code?: string | null;
+          invite_expires_at?: string | null;
           created_at?: string;
           updated_at?: string;
         };
@@ -419,6 +432,41 @@ export interface Database {
           updated_at?: string;
         };
       };
+      tournament_golfers: {
+        Row: {
+          id: string;
+          tournament_id: string;
+          golfer_id: string;
+          sportsdata_player_id: string;
+          odds_to_win: number | null;
+          is_alternate: boolean;
+          tournament_status: string | null;
+          last_updated: string;
+          created_at: string;
+        };
+        Insert: {
+          id?: string;
+          tournament_id: string;
+          golfer_id: string;
+          sportsdata_player_id: string;
+          odds_to_win?: number | null;
+          is_alternate?: boolean;
+          tournament_status?: string | null;
+          last_updated?: string;
+          created_at?: string;
+        };
+        Update: {
+          id?: string;
+          tournament_id?: string;
+          golfer_id?: string;
+          sportsdata_player_id?: string;
+          odds_to_win?: number | null;
+          is_alternate?: boolean;
+          tournament_status?: string | null;
+          last_updated?: string;
+          created_at?: string;
+        };
+      };
       api_usage: {
         Row: {
           id: string;
@@ -461,4 +509,4 @@ export type CompetitionPayment = Database['public']['Tables']['competition_payme
 export type CompetitionBounty = Database['public']['Tables']['competition_bounties']['Row'];
 export type AnnualLeaderboard = Database['public']['Tables']['annual_leaderboard']['Row'];
 export type ApiUsage = Database['public']['Tables']['api_usage']['Row'];
-
+export type TournamentGolfer = Database['public']['Tables']['tournament_golfers']['Row'];

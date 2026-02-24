@@ -81,7 +81,8 @@ src/
 │   ├── auth/         # Authentication
 │   ├── tournaments/   # PGA Tour tournaments
 │   ├── golfers/       # Golfer data
-│   └── competitions/  # User competitions
+│   ├── competitions/  # User competitions (draft, picks, scoring)
+│   └── leaderboard/   # Annual leaderboard
 ├── lib/              # Shared utilities
 │   ├── supabase/     # Supabase client
 │   ├── utils/        # Utility functions
@@ -125,14 +126,14 @@ See [CACHING_STRATEGY.md](./CACHING_STRATEGY.md) for details.
 Development follows an incremental build plan:
 
 1. ✅ Foundation (project setup, Supabase, routing)
-2. ⏳ Authentication
-3. ⏳ Core data models
-4. ⏳ Golfer feature
-5. ⏳ Tournament feature
-6. ⏳ Competition feature
-7. ⏳ Picks feature
-8. ⏳ Scoring & leaderboard
-9. ⏳ Polish & production readiness
+2. ✅ Authentication
+3. ✅ Core data models
+4. ✅ Golfer feature (used in draft)
+5. ✅ Tournament feature (requires Edge Function for API data - see [EDGE_FUNCTION_SETUP.md](./EDGE_FUNCTION_SETUP.md))
+6. ✅ Competition feature (create, join, view)
+7. ✅ Picks feature (snake draft, alternate selection)
+8. ✅ Scoring & leaderboard (competition leaderboard, annual leaderboard)
+9. ✅ Polish (error boundary, loading states)
 
 See [BUILD_PLAN.md](./BUILD_PLAN.md) for the complete plan.
 
@@ -142,6 +143,7 @@ See [BUILD_PLAN.md](./BUILD_PLAN.md) for the complete plan.
 - [TECHNICAL_DECISIONS.md](./TECHNICAL_DECISIONS.md) - What changed from v1 and why
 - [BUILD_PLAN.md](./BUILD_PLAN.md) - Incremental implementation plan
 - [CACHING_STRATEGY.md](./CACHING_STRATEGY.md) - API rate limit management
+- [EDGE_FUNCTION_SETUP.md](./EDGE_FUNCTION_SETUP.md) - SportsData.io API proxy (required for tournaments)
 - [STACK_PROPOSAL.md](./STACK_PROPOSAL.md) - Technology choices and rationale
 
 ## What I Learned Rebuilding This

@@ -24,6 +24,7 @@ export interface SportsDataTournament {
   StartDate: string;
   EndDate: string;
   Course?: string;
+  Venue?: string; // Some API versions use Venue instead of Course
   Purse?: number;
   [key: string]: unknown; // Allow for additional fields
 }

@@ -2,122 +2,161 @@ import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom';
 import { AuthProvider } from '@/contexts/AuthContext';
 import { ProtectedRoute } from '@/components/layout/ProtectedRoute';
 import { Header } from '@/components/layout/Header';
+import { Footer } from '@/components/layout/Footer';
 import { LoginPage } from '@/features/auth/components/LoginPage';
 import { SignupPage } from '@/features/auth/components/SignupPage';
 import { TournamentList } from '@/features/tournaments/components/TournamentList';
 import { TournamentDetail } from '@/features/tournaments/components/TournamentDetail';
 import { CompetitionList } from '@/features/competitions/components/CompetitionList';
 import { CompetitionDetail } from '@/features/competitions/components/CompetitionDetail';
+import { AnnualLeaderboardPage } from '@/features/leaderboard/components/AnnualLeaderboardPage';
+import { JoinPage } from '@/features/competitions/components/JoinPage';
+import { ProfilePage } from '@/features/profile/components/ProfilePage';
+import { HomePage } from '@/features/home/components/HomePage';
+import { ErrorBoundary } from '@/components/ErrorBoundary';
 import './App.css';
 
 /**
  * Root App component.
- * 
- * Sets up routing structure with authentication.
  */
 function App() {
   return (
-    <AuthProvider>
-      <BrowserRouter>
-        <div className="min-h-screen bg-gray-50">
-          <Header />
+    <ErrorBoundary>
+      <AuthProvider>
+        <BrowserRouter>
+          {/* The homepage manages its own full-bleed layout; all other pages use the shared shell */}
           <Routes>
-            <Route path="/" element={<HomePage />} />
-            <Route path="/login" element={<LoginPage />} />
-            <Route path="/signup" element={<SignupPage />} />
-            <Route
-              path="/dashboard"
-              element={
-                <ProtectedRoute>
-                  <DashboardPage />
-                </ProtectedRoute>
-              }
-            />
-            <Route
-              path="/leaderboard"
-              element={
-                <ProtectedRoute>
-                  <LeaderboardPage />
-                </ProtectedRoute>
-              }
-            />
-            <Route
-              path="/tournaments"
-              element={
-                <ProtectedRoute>
-                  <TournamentList />
-                </ProtectedRoute>
-              }
-            />
-            <Route
-              path="/tournaments/:id"
-              element={
-                <ProtectedRoute>
-                  <TournamentDetail />
-                </ProtectedRoute>
-              }
-            />
-            <Route
-              path="/competitions"
-              element={
-                <ProtectedRoute>
-                  <CompetitionList />
-                </ProtectedRoute>
-              }
-            />
-            <Route
-              path="/competitions/:id"
-              element={
-                <ProtectedRoute>
-                  <CompetitionDetail />
-                </ProtectedRoute>
-              }
-            />
-            <Route path="*" element={<Navigate to="/" replace />} />
+            <Route path="/" element={<HomeLayout />} />
+            <Route path="*" element={<AppShell />} />
           </Routes>
-        </div>
-      </BrowserRouter>
-    </AuthProvider>
+        </BrowserRouter>
+      </AuthProvider>
+    </ErrorBoundary>
   );
 }
 
 /**
- * Home page - public landing page.
+ * HomeLayout — homepage gets its own dark full-bleed treatment with Header on top.
  */
-function HomePage() {
+function HomeLayout() {
   return (
-    <div className="container mx-auto px-4 py-8">
-      <h1 className="text-3xl font-bold text-gray-900">Golf Colors</h1>
-      <p className="mt-2 text-gray-600">
-        Compete with friends on PGA Tour tournaments
-      </p>
+    <div className="min-h-screen flex flex-col bg-gray-950">
+      <Header />
+      <main className="flex-1">
+        <HomePage />
+      </main>
     </div>
   );
 }
 
 /**
- * Dashboard page - shows user's competitions.
+ * AppShell — all inner pages share this layout:
+ *   dark Header → light gray content area → dark Footer
+ */
+function AppShell() {
+  return (
+    <div className="min-h-screen flex flex-col bg-gray-50">
+      <Header />
+      <main className="flex-1">
+        <Routes>
+          <Route path="/login" element={<LoginPage />} />
+          <Route path="/signup" element={<SignupPage />} />
+          <Route
+            path="/dashboard"
+            element={
+              <ProtectedRoute>
+                <PageContainer>
+                  <DashboardPage />
+                </PageContainer>
+              </ProtectedRoute>
+            }
+          />
+          <Route
+            path="/leaderboard"
+            element={
+              <ProtectedRoute>
+                <AnnualLeaderboardPage />
+              </ProtectedRoute>
+            }
+          />
+          <Route
+            path="/tournaments"
+            element={
+              <ProtectedRoute>
+                <PageContainer>
+                  <TournamentList />
+                </PageContainer>
+              </ProtectedRoute>
+            }
+          />
+          <Route
+            path="/tournaments/:id"
+            element={
+              <ProtectedRoute>
+                <PageContainer>
+                  <TournamentDetail />
+                </PageContainer>
+              </ProtectedRoute>
+            }
+          />
+          <Route
+            path="/competitions"
+            element={
+              <ProtectedRoute>
+                <PageContainer>
+                  <CompetitionList />
+                </PageContainer>
+              </ProtectedRoute>
+            }
+          />
+          <Route
+            path="/competitions/:id"
+            element={
+              <ProtectedRoute>
+                <PageContainer>
+                  <CompetitionDetail />
+                </PageContainer>
+              </ProtectedRoute>
+            }
+          />
+          <Route
+            path="/profile"
+            element={
+              <ProtectedRoute>
+                <ProfilePage />
+              </ProtectedRoute>
+            }
+          />
+          {/* Public route: invite link */}
+          <Route path="/join/:inviteCode" element={<PageContainer><JoinPage /></PageContainer>} />
+          <Route path="*" element={<Navigate to="/" replace />} />
+        </Routes>
+      </main>
+      <Footer />
+    </div>
+  );
+}
+
+/**
+ * Standard content container — max-width, horizontal padding, vertical spacing.
+ */
+function PageContainer({ children }: { children: React.ReactNode }) {
+  return (
+    <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
+      {children}
+    </div>
+  );
+}
+
+/**
+ * Dashboard page — lists user competitions.
  */
 function DashboardPage() {
   return (
-    <div className="container mx-auto px-4 py-8">
-      <h1 className="text-2xl font-bold text-gray-900 mb-6">Dashboard</h1>
+    <>
+      <h1 className="text-2xl font-bold text-gray-900 mb-6">My Dashboard</h1>
       <CompetitionList />
-    </div>
-  );
-}
-
-/**
- * Annual Leaderboard page - placeholder.
- */
-function LeaderboardPage() {
-  return (
-    <div className="container mx-auto px-4 py-8">
-      <h1 className="text-2xl font-bold text-gray-900">Annual Leaderboard</h1>
-      <p className="mt-2 text-gray-600">
-        Yearly rankings across all competitions
-      </p>
-    </div>
+    </>
   );
 }
 
