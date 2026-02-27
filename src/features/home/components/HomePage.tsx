@@ -34,7 +34,6 @@ interface LeaderEntry {
   totalScore: number | null; // to-par (negative = under)
   totalStrokes: number | null;
   thru: string | null;
-  today: number | null;
   madeCut: boolean | null;
   withdrew: boolean | null;
 }
@@ -260,36 +259,22 @@ function TournamentLeaderboard() {
             const totalToPar = Math.round(p.TotalScore);
             const rounds: any[] = p.PlayerRoundScore ?? [];
 
-            // Find current round data
+            // Find current round data for THRU display
             const currentRd = rounds.find((r: any) => r.Number === currentRound);
             const rdPar = currentRd?.Par ?? 0;
             const rdScore = currentRd?.Score ?? 0;
             const rdTeeTime = currentRd?.TeeTime ?? null;
 
-            let todayToPar: number | null = null;
             let thru: string | null = null;
 
             if (!currentRd || (rdPar === 0 && rdScore === 0)) {
               // Player hasn't started today's round → show tee time
-              todayToPar = null;
               thru = formatTeeTime(rdTeeTime);
+            } else if (rdPar >= coursePar) {
+              thru = 'F';
             } else {
-              // Player is on course or finished today.
-              // Per-round Score/Par fields are unreliable (partially DFS-adjusted).
-              // Derive TODAY = TotalScore - sum(prior completed rounds' to-par).
-              // This uses the verified-accurate TotalScore as the anchor.
-              const priorRoundsToPar = rounds
-                .filter((r: any) => r.Number < currentRound && r.Par > 0 && r.Score > 0)
-                .reduce((sum: number, r: any) => sum + (r.Score - r.Par), 0);
-              todayToPar = totalToPar - priorRoundsToPar;
-
-              // THRU: check if round is finished (round Par >= course par)
-              if (rdPar >= coursePar) {
-                thru = 'F';
-              } else {
-                const lbThru = thruMap.get(p.PlayerID);
-                thru = lbThru != null ? String(lbThru) : null;
-              }
+              const lbThru = thruMap.get(p.PlayerID);
+              thru = lbThru != null ? String(lbThru) : null;
             }
 
             // Determine made_cut: only after round 3+ begins
@@ -302,7 +287,6 @@ function TournamentLeaderboard() {
               totalScore: totalToPar,
               totalStrokes: p.TotalStrokes != null ? Math.round(p.TotalStrokes) : null,
               thru,
-              today: todayToPar,
               madeCut,
               withdrew: false, // filtered out above
             };
@@ -399,7 +383,6 @@ function TournamentLeaderboard() {
                 <th className="text-left pl-4 pr-2 py-2.5 font-semibold text-gray-500 text-xs uppercase tracking-wide w-8">Pos</th>
                 <th className="text-left px-2 py-2.5 font-semibold text-gray-500 text-xs uppercase tracking-wide">Player</th>
                 <th className="text-right px-2 py-2.5 font-semibold text-gray-500 text-xs uppercase tracking-wide">Total</th>
-                <th className="text-right px-2 py-2.5 font-semibold text-gray-500 text-xs uppercase tracking-wide hidden sm:table-cell">Today</th>
                 <th className="text-right pr-4 pl-2 py-2.5 font-semibold text-gray-500 text-xs uppercase tracking-wide hidden sm:table-cell">Thru</th>
               </tr>
             </thead>
@@ -420,9 +403,6 @@ function TournamentLeaderboard() {
                   </td>
                   <td className={`px-2 py-2.5 text-right font-mono font-semibold ${scoreColor(entry.totalScore)}`}>
                     {formatScore(entry.totalScore)}
-                  </td>
-                  <td className={`px-2 py-2.5 text-right font-mono text-sm hidden sm:table-cell ${scoreColor(entry.today)}`}>
-                    {entry.today !== null ? formatScore(entry.today) : '—'}
                   </td>
                   <td className="pr-4 pl-2 py-2.5 text-right text-gray-400 text-xs hidden sm:table-cell">
                     {entry.thru ?? '—'}

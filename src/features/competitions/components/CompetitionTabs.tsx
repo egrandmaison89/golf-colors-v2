@@ -10,7 +10,7 @@
  *   4. Results  — live payment preview (what each player would owe/win right now)
  */
 
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { supabase } from '@/lib/supabase/client';
 import { useCompetitionLeaderboard } from '../hooks/useCompetitionLeaderboard';
 import { BountyCard } from './BountyCard';
@@ -46,7 +46,6 @@ interface FieldEntry {
   alternateOwnerName: string | null;
   // Live data (from API during active tournaments)
   thru: string | null;
-  today: number | null;
 }
 
 interface ResultEntry {
@@ -141,6 +140,56 @@ function calculateLivePayments(leaderboard: LeaderboardEntry[]): ResultEntry[] {
 // ─── Sub-views ────────────────────────────────────────────────────────────────
 
 /** Teams tab — existing leaderboard view with per-golfer breakdown */
+/** Inline click-to-expand score explanation with click-outside, Escape, and tap-to-dismiss */
+function ScoreInfoButton({ text }: { text: string }) {
+  const [open, setOpen] = useState(false);
+  const wrapperRef = useRef<HTMLSpanElement>(null);
+
+  useEffect(() => {
+    if (!open) return;
+
+    const handleClickOutside = (e: MouseEvent | TouchEvent) => {
+      if (wrapperRef.current && !wrapperRef.current.contains(e.target as Node)) {
+        setOpen(false);
+      }
+    };
+    const handleEscape = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') setOpen(false);
+    };
+
+    document.addEventListener('mousedown', handleClickOutside);
+    document.addEventListener('touchstart', handleClickOutside);
+    document.addEventListener('keydown', handleEscape);
+    return () => {
+      document.removeEventListener('mousedown', handleClickOutside);
+      document.removeEventListener('touchstart', handleClickOutside);
+      document.removeEventListener('keydown', handleEscape);
+    };
+  }, [open]);
+
+  return (
+    <span ref={wrapperRef} className="relative inline-flex">
+      <button
+        onClick={(e) => { e.stopPropagation(); setOpen(!open); }}
+        className="w-4 h-4 rounded-full bg-gray-200 text-gray-500 text-[10px] flex items-center justify-center hover:bg-gray-300 shrink-0 leading-none"
+        aria-label="Score explanation"
+        aria-expanded={open}
+      >
+        ?
+      </button>
+      {open && (
+        <div
+          role="tooltip"
+          onClick={() => setOpen(false)}
+          className="absolute left-0 top-full mt-1 w-64 text-xs text-gray-500 bg-gray-50 rounded-lg px-3 py-2 border border-gray-100 z-10 cursor-pointer"
+        >
+          {text}
+        </div>
+      )}
+    </span>
+  );
+}
+
 function TeamsView({
   leaderboard,
   currentUserId,
@@ -167,6 +216,7 @@ function TeamsView({
       {leaderboard.map((entry) => {
         const isMe = entry.userId === currentUserId;
         const name = isMe ? 'You' : entry.displayName;
+        const alternateIsActive = entry.scoreBreakdown.some((g) => g.usedAlternate);
 
         return (
           <div
@@ -195,40 +245,60 @@ function TeamsView({
 
             <div className="ml-10 space-y-1">
               {entry.scoreBreakdown.map((g) => (
-                <div key={g.golferId} className="flex justify-between text-sm text-gray-600">
-                  <span className="flex items-center gap-1">
-                    {g.withdrew && g.usedAlternate ? (
-                      <>
-                        <span className="line-through text-gray-400">{g.golferName}</span>
-                        <span className="text-xs text-amber-600 font-medium">
-                          → {g.alternateGolferName ?? 'Alt'} (alt)
-                        </span>
-                      </>
-                    ) : (
-                      g.golferName
-                    )}
-                    {g.missedCut && <span className="text-xs text-red-500">(MC)</span>}
-                    {g.withdrew && !g.usedAlternate && (
-                      <span className="text-xs text-gray-400">(WD)</span>
-                    )}
-                  </span>
-                  <span className={`font-mono ${scoreColor(g.scoreToPar)}`}>
-                    {formatScore(g.scoreToPar)}
-                  </span>
+                <div key={g.golferId} className="relative">
+                  <div className="flex items-center justify-between text-sm text-gray-600">
+                    <span className="flex items-center gap-1">
+                      {g.withdrew && g.usedAlternate ? (
+                        <>
+                          <span className="line-through text-gray-400">{g.golferName}</span>
+                          <span className="text-xs text-amber-600 font-medium">
+                            → {g.alternateGolferName ?? 'Alt'} (alt)
+                          </span>
+                        </>
+                      ) : (
+                        g.golferName
+                      )}
+                      {g.missedCut && <span className="text-xs text-red-500">(MC)</span>}
+                      {g.withdrew && !g.usedAlternate && (
+                        <span className="text-xs text-gray-400">(WD)</span>
+                      )}
+                      {g.scoreExplanation && <ScoreInfoButton text={g.scoreExplanation} />}
+                    </span>
+                    <span className={`font-mono ${scoreColor(g.scoreToPar)}`}>
+                      {formatScore(g.scoreToPar)}
+                    </span>
+                  </div>
                 </div>
               ))}
-              {/* Alternate golfer — always shown if selected, muted to indicate it doesn't count unless a WD occurs */}
+              {/* Alternate golfer — always shown if selected */}
               {entry.alternate && (
-                <div className="flex justify-between text-sm text-gray-400 mt-1 pt-1 border-t border-dashed border-gray-200">
-                  <span className="flex items-center gap-1.5 italic">
-                    <span className="text-xs bg-gray-100 text-gray-400 px-1.5 py-0.5 rounded font-medium not-italic">
-                      ALT
+                <div className={`relative mt-1 pt-1 border-t border-dashed ${
+                  alternateIsActive
+                    ? 'border-amber-200 bg-amber-50 -mx-1 px-1 rounded'
+                    : 'border-gray-200'
+                }`}>
+                  <div className={`flex items-center justify-between text-sm ${
+                    alternateIsActive ? 'text-amber-700' : 'text-gray-400'
+                  }`}>
+                    <span className="flex items-center gap-1.5 italic">
+                      <span className={`text-xs px-1.5 py-0.5 rounded font-medium not-italic ${
+                        alternateIsActive
+                          ? 'bg-amber-100 text-amber-700'
+                          : 'bg-gray-100 text-gray-400'
+                      }`}>
+                        ALT
+                      </span>
+                      {entry.alternate.golferName}
+                      {entry.alternate.alternateExplanation && (
+                        <ScoreInfoButton text={entry.alternate.alternateExplanation} />
+                      )}
                     </span>
-                    {entry.alternate.golferName}
-                  </span>
-                  <span className="font-mono text-gray-300">
-                    {formatScore(entry.alternate.scoreToPar)}
-                  </span>
+                    <span className={`font-mono ${
+                      alternateIsActive ? 'text-amber-700' : 'text-gray-300'
+                    }`}>
+                      {formatScore(entry.alternate.scoreToPar)}
+                    </span>
+                  </div>
                 </div>
               )}
             </div>
@@ -274,9 +344,6 @@ function FieldTable({
             </th>
             <th className="px-2 py-2.5 text-right text-xs font-semibold text-gray-400 uppercase tracking-wide">
               Score
-            </th>
-            <th className="px-2 py-2.5 text-right text-xs font-semibold text-gray-400 uppercase tracking-wide hidden sm:table-cell">
-              Today
             </th>
             <th className="px-2 py-2.5 text-right text-xs font-semibold text-gray-400 uppercase tracking-wide hidden sm:table-cell">
               Thru
@@ -326,11 +393,6 @@ function FieldTable({
                 {/* Score */}
                 <td className={`px-2 py-2.5 text-right font-mono font-semibold ${scoreColor(entry.scoreToPar)}`}>
                   {formatScore(entry.scoreToPar)}
-                </td>
-
-                {/* Today */}
-                <td className={`px-2 py-2.5 text-right font-mono text-sm hidden sm:table-cell ${scoreColor(entry.today)}`}>
-                  {entry.today !== null ? formatScore(entry.today) : '—'}
                 </td>
 
                 {/* Thru */}
@@ -546,7 +608,7 @@ export function CompetitionTabs({
       }
 
       // Fetch live THRU/TODAY data if tournament is active
-      const liveDataMap = new Map<string, { thru: string | null; today: number | null }>();
+      const liveDataMap = new Map<string, { thru: string | null }>();
       if (sportsdataId && tournamentStatus === 'active') {
         try {
           const { getPlayerRoundScores, getTournamentLeaderboard } = await import('@/lib/api/sportsdata');
@@ -585,44 +647,33 @@ export function CompetitionTabs({
             } catch { return null; }
           };
 
-          // Build live data for each player
+          // Build live THRU data for each player
           for (const p of rsPlayers) {
             if (p.TotalScore == null) continue;
             const golferId = sportsdataToGolfer.get(String(p.PlayerID));
             if (!golferId) continue;
 
-            const totalToPar = Math.round(p.TotalScore);
-            const rounds: any[] = p.PlayerRoundScore ?? [];
-            const currentRd = rounds.find((r: any) => r.Number === curRound);
+            const pRounds: any[] = p.PlayerRoundScore ?? [];
+            const currentRd = pRounds.find((r: any) => r.Number === curRound);
             const rdPar = currentRd?.Par ?? 0;
             const rdScore = currentRd?.Score ?? 0;
             const rdTeeTime = currentRd?.TeeTime ?? null;
 
-            let today: number | null = null;
             let thru: string | null = null;
 
             if (!currentRd || (rdPar === 0 && rdScore === 0)) {
-              today = null;
               thru = fmtTeeTime(rdTeeTime);
+            } else if (rdPar >= coursePar) {
+              thru = 'F';
             } else {
-              // Derive TODAY = TotalScore - sum(prior completed rounds)
-              const priorToPar = rounds
-                .filter((r: any) => r.Number < curRound && r.Par > 0 && r.Score > 0)
-                .reduce((sum: number, r: any) => sum + (r.Score - r.Par), 0);
-              today = totalToPar - priorToPar;
-
-              if (rdPar >= coursePar) {
-                thru = 'F';
-              } else {
-                const lbThru = thruMap.get(p.PlayerID);
-                thru = lbThru != null ? String(lbThru) : null;
-              }
+              const lbThru = thruMap.get(p.PlayerID);
+              thru = lbThru != null ? String(lbThru) : null;
             }
 
-            liveDataMap.set(golferId, { thru, today });
+            liveDataMap.set(golferId, { thru });
           }
         } catch {
-          // Silently fail — THRU/TODAY just won't show
+          // Silently fail — THRU just won't show
         }
       }
 
@@ -649,7 +700,6 @@ export function CompetitionTabs({
           alternateOwnerColor: altInfo?.teamColor ?? null,
           alternateOwnerName: altInfo?.displayName ?? null,
           thru: liveData?.thru ?? null,
-          today: liveData?.today ?? null,
         };
       });
 

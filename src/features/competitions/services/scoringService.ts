@@ -25,12 +25,16 @@ export interface LeaderboardEntry {
     alternateGolferName: string | null;
     missedCut: boolean;
     withdrew: boolean;
+    /** Explanation text for altered scores (MC, WD, etc.) — null for normal play */
+    scoreExplanation: string | null;
   }[];
   /** The team's selected alternate golfer (always shown, even if not activated) */
   alternate: {
     golferId: string;
     golferName: string;
     scoreToPar: number | null;
+    /** Explanation text for the alternate's role */
+    alternateExplanation: string | null;
   } | null;
 }
 
@@ -227,6 +231,8 @@ export async function getCompetitionLeaderboard(
       let usedAlternate = false;
       let missedCut = false;
       let withdrew = false;
+      let scoreExplanation: string | null = null;
+      const golferName = pick.golfer?.display_name ?? 'Unknown';
 
       // Determine if this player is effectively "not playing":
       //   - No tournament_results row at all (not in API Players array)
@@ -245,9 +251,24 @@ export async function getCompetitionLeaderboard(
         scoreToPar = resolved.scoreToPar;
         usedAlternate = resolved.usedAlternate;
         alternateUsed = resolved.alternateUsed;
+
+        // Build explanation
+        if (usedAlternate) {
+          const altName = alternateGolferNameByUser.get(userId) ?? 'Alternate';
+          scoreExplanation = `${golferName} withdrew. ${altName}'s score of ${fmtScore(scoreToPar)} is used for this team's total.`;
+        } else {
+          scoreExplanation = `${golferName} withdrew with no available alternate. Their score is ${fmtScore(scoreToPar)}, set to 1 stroke worse than the highest drafted player's score. This score may change as the tournament progresses.`;
+        }
       } else if (result!.made_cut === false) {
         missedCut = true;
         scoreToPar = getMissedCutScore(result!);
+
+        // Compute the pre-doubled 2-round total for explanation
+        const rounds = result!.rounds as { ToPar?: number }[] | null;
+        const twoRoundToPar = rounds && rounds.length >= 2
+          ? (rounds[0]?.ToPar ?? 0) + (rounds[1]?.ToPar ?? 0)
+          : result!.total_to_par ?? 0;
+        scoreExplanation = `${golferName} missed the cut after 2 rounds at ${fmtScore(twoRoundToPar)}. Their score is doubled to ${fmtScore(scoreToPar)} for this competition.`;
       } else {
         scoreToPar = result!.total_to_par ?? 0;
       }
@@ -257,7 +278,7 @@ export async function getCompetitionLeaderboard(
       }
       breakdown.push({
         golferId: pick.golfer_id,
-        golferName: pick.golfer?.display_name ?? 'Unknown',
+        golferName,
         scoreToPar,
         usedAlternate,
         alternateGolferName: usedAlternate
@@ -265,6 +286,7 @@ export async function getCompetitionLeaderboard(
           : null,
         missedCut,
         withdrew,
+        scoreExplanation,
       });
 
       const strokes = result?.total_score;
@@ -274,12 +296,18 @@ export async function getCompetitionLeaderboard(
     // Build alternate info for display (always shown, even if not activated)
     const altGolferId = alternateByUser.get(userId);
     let alternate: LeaderboardEntry['alternate'] = null;
+    const alternateIsActive = breakdown.some((g) => g.usedAlternate);
     if (altGolferId) {
       const altResult = resultsByGolfer.get(altGolferId);
+      const altName = alternateGolferNameByUser.get(userId) ?? 'Unknown';
+      const altExplanation = alternateIsActive
+        ? `${altName}'s score is counting toward this team's total in place of a withdrawn player.`
+        : `${altName} is your selected alternate. Their score will only count if one of your drafted players withdraws.`;
       alternate = {
         golferId: altGolferId,
-        golferName: alternateGolferNameByUser.get(userId) ?? 'Unknown',
+        golferName: altName,
         scoreToPar: altResult?.total_to_par ?? null,
+        alternateExplanation: altExplanation,
       };
     }
 
@@ -397,6 +425,13 @@ function resolveWithdrawalScore(
     usedAlternate: false,
     alternateUsed,
   };
+}
+
+/** Format a to-par score for explanation text (e.g. +4, -2, E) */
+function fmtScore(n: number | null): string {
+  if (n === null) return '—';
+  if (n === 0) return 'E';
+  return n > 0 ? `+${n}` : `${n}`;
 }
 
 function getEffectiveScoreToPar(result: TournamentResult): number {
