@@ -273,14 +273,13 @@ export async function joinCompetition(competitionId: string, userId: string): Pr
  * Check if user is a participant in a competition
  */
 export async function isParticipant(competitionId: string, userId: string): Promise<boolean> {
-  const { data, error } = await supabase
+  const { data } = await supabase
     .from('competition_participants')
     .select('id')
     .eq('competition_id', competitionId)
     .eq('user_id', userId)
-    .single();
+    .maybeSingle();
 
-  if (error && error.code !== 'PGRST116') return false;
   return !!data;
 }
 
@@ -346,6 +345,43 @@ export async function maybeAutoStartDraft(competition: CompetitionWithDetails): 
     .eq('id', competition.id);
 
   return !updateError;
+}
+
+// ============================================================================
+// Draft order helpers
+// ============================================================================
+
+/**
+ * Find the most recently completed competition that shares participants with
+ * the current competition. Used to pre-populate draft order from past standings.
+ * Returns the competition ID, or null if none found.
+ */
+export async function getPreviousCompetitionForParticipants(
+  currentCompetitionId: string,
+  participantUserIds: string[]
+): Promise<string | null> {
+  if (participantUserIds.length === 0) return null;
+
+  // Find completed competitions (excluding current) where at least one participant overlaps
+  const { data: candidateParticipants } = await supabase
+    .from('competition_participants')
+    .select('competition_id')
+    .in('user_id', participantUserIds)
+    .neq('competition_id', currentCompetitionId);
+
+  if (!candidateParticipants || candidateParticipants.length === 0) return null;
+
+  const candidateIds = [...new Set(candidateParticipants.map((p) => p.competition_id))];
+
+  const { data: completed } = await supabase
+    .from('competitions')
+    .select('id, draft_completed_at')
+    .in('id', candidateIds)
+    .eq('draft_status', 'completed')
+    .order('draft_completed_at', { ascending: false })
+    .limit(1);
+
+  return completed?.[0]?.id ?? null;
 }
 
 // ============================================================================

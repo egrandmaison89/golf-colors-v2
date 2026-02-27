@@ -7,6 +7,7 @@
 
 import { useState, useEffect } from 'react';
 import { calculateBounties } from '../services/bountyService';
+import { finalizeCompetition } from '../services/scoringService';
 import type { BountyResult } from '../services/bountyService';
 import type { LeaderboardEntry } from '../services/scoringService';
 
@@ -24,6 +25,14 @@ export function BountyCard({ competitionId, leaderboard }: BountyCardProps) {
       setBounty(null);
       return;
     }
+
+    // Finalize competition first (idempotent — safe to call on every mount).
+    // This persists competition_scores, main competition payments, and annual_leaderboard.
+    // calculateBounties is called internally by finalizeCompetition, but we also
+    // call it here directly so we can display the bounty result in the UI.
+    finalizeCompetition(competitionId).catch((err) => {
+      console.error('finalizeCompetition error:', err);
+    });
 
     calculateBounties(competitionId, leaderboard)
       .then((result) => setBounty(result))

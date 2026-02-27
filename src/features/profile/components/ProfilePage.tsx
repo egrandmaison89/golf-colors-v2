@@ -15,6 +15,7 @@ interface UserProfile {
   display_name: string | null;
   team_color: TeamColor | null;
   venmo_link: string | null;
+  phone_number: string | null;
 }
 
 const COLOR_OPTIONS: { value: TeamColor; label: string; bg: string; ring: string; dot: string }[] = [
@@ -31,6 +32,7 @@ export function ProfilePage() {
     display_name: '',
     team_color: null,
     venmo_link: '',
+    phone_number: '',
   });
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
@@ -46,7 +48,7 @@ export function ProfilePage() {
     setLoading(true);
     const { data, error } = await supabase
       .from('user_profiles')
-      .select('display_name, team_color, venmo_link')
+      .select('display_name, team_color, venmo_link, phone_number')
       .eq('id', user!.id)
       .single();
 
@@ -55,6 +57,7 @@ export function ProfilePage() {
         display_name: data.display_name ?? '',
         team_color: (data.team_color as TeamColor) ?? null,
         venmo_link: data.venmo_link ?? '',
+        phone_number: data.phone_number ?? '',
       });
     } else if (error && error.code !== 'PGRST116') {
       setError('Failed to load profile.');
@@ -72,6 +75,13 @@ export function ProfilePage() {
 
     const displayName = profile.display_name?.trim() || null;
     const venmoLink = profile.venmo_link?.trim() || null;
+    // Normalize phone to E.164: strip everything except digits and leading +
+    const rawPhone = profile.phone_number?.trim() || '';
+    const phoneNumber = rawPhone
+      ? rawPhone.startsWith('+')
+        ? rawPhone.replace(/[^\d+]/g, '')
+        : '+1' + rawPhone.replace(/\D/g, '')
+      : null;
 
     const { error: upsertError } = await supabase
       .from('user_profiles')
@@ -81,6 +91,7 @@ export function ProfilePage() {
           display_name: displayName,
           team_color: profile.team_color,
           venmo_link: venmoLink,
+          phone_number: phoneNumber,
         },
         { onConflict: 'id' }
       );
@@ -193,6 +204,24 @@ export function ProfilePage() {
               className="w-full rounded-xl border border-gray-200 px-4 py-2.5 text-sm text-gray-900 placeholder-gray-400 shadow-sm focus:outline-none focus:ring-2 focus:ring-green-500 focus:border-transparent transition"
             />
             <p className="mt-1.5 text-xs text-gray-400">Shown to other players when competition payments are settled.</p>
+          </div>
+
+          {/* Phone Number */}
+          <div>
+            <label htmlFor="phone-number" className="block text-sm font-medium text-gray-700 mb-1.5">
+              Phone Number <span className="text-gray-400 font-normal">(optional)</span>
+            </label>
+            <input
+              id="phone-number"
+              type="tel"
+              placeholder="+1 (555) 555-5555"
+              value={profile.phone_number ?? ''}
+              onChange={(e) => setProfile((p) => ({ ...p, phone_number: e.target.value }))}
+              className="w-full rounded-xl border border-gray-200 px-4 py-2.5 text-sm text-gray-900 placeholder-gray-400 shadow-sm focus:outline-none focus:ring-2 focus:ring-green-500 focus:border-transparent transition"
+            />
+            <p className="mt-1.5 text-xs text-gray-400 flex items-center gap-1">
+              <span>📱</span> You'll receive a text message when it's your turn to draft.
+            </p>
           </div>
 
           {/* Error */}

@@ -96,18 +96,61 @@ Deno.serve(async (req: Request) => {
       );
     }
 
-    // Track API usage in Supabase (only on successful responses)
+    // Track API usage + capture leaderboard snapshots (only on successful responses)
     if (apiResponse.ok) {
       try {
         const supabaseUrl = Deno.env.get("SUPABASE_URL")!;
         const supabaseServiceKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
         const supabase = createClient(supabaseUrl, supabaseServiceKey);
+
+        // 1. Track API call count (rate limit monitoring)
         const today = new Date().toISOString().split("T")[0];
         await supabase.from("api_usage").insert({
           endpoint,
           data_type: "tournament",
           day: today,
         });
+
+        // 2. Snapshot leaderboard responses for API evolution debugging.
+        //
+        //    SportsData.io changes its response shape across tournament stages
+        //    (pre-tournament → rounds 1-2 → post-cut → rounds 3-4 → completed).
+        //    We capture one snapshot per (tournament × round × status) transition
+        //    so we can always inspect exactly what the API returned at each stage.
+        //
+        //    Deduplication is handled by the unique index in migration 020.
+        //    INSERT ... ON CONFLICT DO NOTHING (error code 23505 = silently skip).
+        if (endpoint.toLowerCase().includes("/leaderboard/")) {
+          try {
+            const responseData = data as Record<string, unknown>;
+            const tournamentInfo = responseData?.Tournament as Record<string, unknown> | undefined;
+            const sportsdataTournamentId = String(
+              tournamentInfo?.TournamentID ?? endpoint.split("/").pop() ?? "unknown"
+            );
+            const roundNumber = (tournamentInfo?.Round as number | null | undefined) ?? null;
+            const tournamentStatus = (tournamentInfo?.Status as string | null | undefined) ?? null;
+            const players = (responseData?.Players as unknown[]) ?? [];
+
+            const { error: snapError } = await supabase
+              .from("api_snapshots")
+              .insert({
+                endpoint,
+                sportsdata_tournament_id: sportsdataTournamentId,
+                round_number: roundNumber,
+                tournament_status: tournamentStatus,
+                player_count: players.length,
+                raw_response: responseData,
+              });
+
+            // 23505 = unique_violation — this round+status already captured, skip silently
+            if (snapError && snapError.code !== "23505") {
+              console.error("Failed to capture API snapshot:", snapError.message);
+            }
+          } catch (snapErr) {
+            // Never let snapshot logic break the main proxy response
+            console.error("Snapshot capture exception:", snapErr);
+          }
+        }
       } catch (trackError) {
         console.error("Failed to track API usage:", trackError);
       }

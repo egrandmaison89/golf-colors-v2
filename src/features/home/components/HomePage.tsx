@@ -12,7 +12,8 @@
 import { useState, useEffect } from 'react';
 import { Link } from 'react-router-dom';
 import { supabase } from '@/lib/supabase/client';
-import { getTournamentLeaderboard } from '@/lib/api/sportsdata';
+import { getTournamentLeaderboard, getPlayerRoundScores } from '@/lib/api/sportsdata';
+import { useAuth } from '@/contexts/AuthContext';
 
 // ─── Types ───────────────────────────────────────────────────────────────────
 
@@ -118,14 +119,35 @@ function TeamColorDot({ color }: { color: 'green' | 'red' | 'blue' | 'yellow' })
 // ─── Live Leaderboard Component ───────────────────────────────────────────────
 
 function TournamentLeaderboard() {
+  const { user } = useAuth();
   const [tournament, setTournament] = useState<Tournament | null>(null);
   const [leaders, setLeaders] = useState<LeaderEntry[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [myCompetition, setMyCompetition] = useState<{ id: string; name: string } | null>(null);
 
   useEffect(() => {
     loadLeaderboard();
   }, []);
+
+  // Find user's competition for the featured tournament
+  useEffect(() => {
+    if (!user || !tournament) return;
+    supabase
+      .from('competition_participants')
+      .select('competition_id, competitions(id, name, tournament_id)')
+      .eq('user_id', user.id)
+      .then(({ data }) => {
+        const match = (data ?? []).find((p: any) => {
+          const comp = Array.isArray(p.competitions) ? p.competitions[0] : p.competitions;
+          return comp?.tournament_id === tournament.id;
+        });
+        if (match) {
+          const comp = Array.isArray(match.competitions) ? match.competitions[0] : match.competitions;
+          if (comp) setMyCompetition({ id: comp.id, name: comp.name });
+        }
+      });
+  }, [user?.id, tournament?.id]);
 
   async function loadLeaderboard() {
     setLoading(true);
@@ -151,46 +173,150 @@ function TournamentLeaderboard() {
 
       setTournament(featured);
 
-      // 2. Fetch leaderboard from SportsData via edge function
-      const raw = await getTournamentLeaderboard(featured.sportsdata_id) as {
-        Players?: Array<{
-          Name: string;
-          Position: string | number | null;
-          TotalScore: number | null;      // to-par
-          TotalStrokes: number | null;
-          TodayScore: number | null;      // today's to-par
-          Thru: string | null;
-          MadeCut: boolean | null;
-          Withdrew: boolean | null;
-          IsAlternate: boolean;
-        }>;
-      };
-
-      const players = raw?.Players ?? [];
-
-      if (players.length === 0) {
-        // Tournament hasn't started yet — show the field with odds if available
+      // 2. Only call APIs for active tournaments.
+      //    Upcoming tournaments have no scores yet — skip API calls entirely
+      //    and let the "Tournament begins [date]" empty-state render naturally.
+      if (featured.status !== 'active') {
         setLeaders([]);
         return;
       }
 
-      // Show top 15 players, non-alternates
-      const parsed: LeaderEntry[] = players
-        .filter((p) => !p.IsAlternate)
-        .slice(0, 15)
-        .map((p) => ({
-          name: p.Name,
-          position: p.Position,
-          totalScore: p.TotalScore,
-          totalStrokes: p.TotalStrokes,
-          thru: p.Thru,
-          today: p.TodayScore,
-          madeCut: p.MadeCut,
-          withdrew: p.Withdrew,
-        }));
+      // 3. Fetch REAL scoring data + supplementary leaderboard data.
+      //    - PlayerTournamentRoundScores: real scores (TotalScore, per-round Score/Par, TeeTime)
+      //    - Leaderboard: TotalThrough (holes completed) + Tournament.Rounds[].IsRoundOver
+      //    The Leaderboard endpoint returns DFS-scrambled SCORES (do NOT use for scoring),
+      //    but structural fields (TotalThrough, IsRoundOver) are still accurate.
+      try {
+        const [roundScoresRaw, leaderboardRaw] = await Promise.all([
+          getPlayerRoundScores(featured.sportsdata_id),
+          getTournamentLeaderboard(featured.sportsdata_id),
+        ]);
 
-      setLeaders(parsed);
+        const rsPlayers: any[] = Array.isArray(roundScoresRaw) ? roundScoresRaw : [];
+        const lbData = leaderboardRaw as any;
+
+        if (rsPlayers.length === 0) {
+          setLeaders([]);
+          return;
+        }
+
+        // Determine current round from Tournament.Rounds[].IsRoundOver
+        const tournamentRounds: any[] = lbData?.Tournament?.Rounds ?? [];
+        let currentRound = 1;
+        for (const r of tournamentRounds) {
+          if (r.IsRoundOver === true) {
+            currentRound = Math.max(currentRound, (r.Number ?? 0) + 1);
+          }
+        }
+        currentRound = Math.min(currentRound, 4);
+
+        const cutHasBeenMade = currentRound >= 3;
+
+        // Get course par from Tournament (or default to 72)
+        const coursePar: number = lbData?.Tournament?.Par ?? 72;
+
+        // Build TotalThrough map from Leaderboard (structural, not scrambled)
+        const thruMap = new Map<number, number | null>();
+        for (const p of (lbData?.Players ?? []) as any[]) {
+          thruMap.set(p.PlayerID, p.TotalThrough ?? null);
+        }
+
+        // Format tee time for display (e.g., "1:23 PM")
+        const formatTeeTime = (isoStr: string | null): string | null => {
+          if (!isoStr) return null;
+          try {
+            const d = new Date(isoStr);
+            return d.toLocaleTimeString('en-US', {
+              hour: 'numeric',
+              minute: '2-digit',
+              hour12: true,
+              timeZone: 'America/New_York',
+            });
+          } catch {
+            return null;
+          }
+        };
+
+        // Filter out withdrawn players (TotalScore is null)
+        // and sort by TotalScore ascending (lowest = best)
+        const activePlayers = rsPlayers
+          .filter((p: any) => p.TotalScore != null)
+          .sort((a: any, b: any) => a.TotalScore - b.TotalScore);
+
+        // Assign positions with tie handling
+        const positions = new Map<number, number>();
+        let pos = 1;
+        for (let i = 0; i < activePlayers.length; i++) {
+          if (i > 0 && activePlayers[i].TotalScore !== activePlayers[i - 1].TotalScore) {
+            pos = i + 1;
+          }
+          positions.set(activePlayers[i].PlayerID, pos);
+        }
+
+        // Build top 15 leaderboard entries
+        const parsed: LeaderEntry[] = activePlayers
+          .slice(0, 15)
+          .map((p: any) => {
+            const totalToPar = Math.round(p.TotalScore);
+            const rounds: any[] = p.PlayerRoundScore ?? [];
+
+            // Find current round data
+            const currentRd = rounds.find((r: any) => r.Number === currentRound);
+            const rdPar = currentRd?.Par ?? 0;
+            const rdScore = currentRd?.Score ?? 0;
+            const rdTeeTime = currentRd?.TeeTime ?? null;
+
+            let todayToPar: number | null = null;
+            let thru: string | null = null;
+
+            if (!currentRd || (rdPar === 0 && rdScore === 0)) {
+              // Player hasn't started today's round → show tee time
+              todayToPar = null;
+              thru = formatTeeTime(rdTeeTime);
+            } else {
+              // Player is on course or finished today.
+              // Per-round Score/Par fields are unreliable (partially DFS-adjusted).
+              // Derive TODAY = TotalScore - sum(prior completed rounds' to-par).
+              // This uses the verified-accurate TotalScore as the anchor.
+              const priorRoundsToPar = rounds
+                .filter((r: any) => r.Number < currentRound && r.Par > 0 && r.Score > 0)
+                .reduce((sum: number, r: any) => sum + (r.Score - r.Par), 0);
+              todayToPar = totalToPar - priorRoundsToPar;
+
+              // THRU: check if round is finished (round Par >= course par)
+              if (rdPar >= coursePar) {
+                thru = 'F';
+              } else {
+                const lbThru = thruMap.get(p.PlayerID);
+                thru = lbThru != null ? String(lbThru) : null;
+              }
+            }
+
+            // Determine made_cut: only after round 3+ begins
+            const hasRound3Plus = rounds.some((r: any) => r.Number >= 3 && r.Par > 0);
+            const madeCut: boolean | null = cutHasBeenMade ? hasRound3Plus : null;
+
+            return {
+              name: `${p.FirstName ?? ''} ${p.LastName ?? ''}`.trim() || 'Unknown',
+              position: positions.get(p.PlayerID) ?? null,
+              totalScore: totalToPar,
+              totalStrokes: p.TotalStrokes != null ? Math.round(p.TotalStrokes) : null,
+              thru,
+              today: todayToPar,
+              madeCut,
+              withdrew: false, // filtered out above
+            };
+          });
+
+        setLeaders(parsed);
+      } catch (apiErr) {
+        // API failure (401, rate limit, SportsData outage, edge function down, etc.)
+        // Degrade gracefully: show tournament info + "check back for scores" empty state.
+        console.warn('Leaderboard API unavailable, showing empty state:', apiErr);
+        setLeaders([]);
+      }
     } catch (err) {
+      // DB failure: something fundamentally broken — show error state
       console.error('Leaderboard load error:', err);
       setError('Could not load leaderboard right now.');
     } finally {
@@ -245,6 +371,14 @@ function TournamentLeaderboard() {
           {tournament?.course_name ?? ''}{tournament?.course_name ? ' · ' : ''}{startDate}
           {tournament?.purse ? ` · ${formatPurse(tournament.purse)} purse` : ''}
         </p>
+        {myCompetition && (
+          <Link
+            to={`/competitions/${myCompetition.id}`}
+            className="inline-flex items-center gap-1.5 mt-2 text-sm font-semibold text-green-500 hover:text-green-400 transition-colors"
+          >
+            View My Competition: {myCompetition.name} →
+          </Link>
+        )}
       </div>
 
       {/* No scores yet */}
@@ -402,6 +536,7 @@ function ScoringSection() {
 // ─── Main HomePage ────────────────────────────────────────────────────────────
 
 export function HomePage() {
+  const { user } = useAuth();
   return (
     <div className="min-h-screen bg-white">
 
@@ -439,18 +574,29 @@ export function HomePage() {
             </p>
 
             <div className="flex flex-wrap gap-4">
-              <Link
-                to="/signup"
-                className="inline-flex items-center gap-2 px-7 py-3.5 bg-green-500 hover:bg-green-400 text-white font-bold rounded-xl text-base shadow-lg shadow-green-900/30 transition-all hover:scale-105"
-              >
-                Get Started Free →
-              </Link>
-              <Link
-                to="/login"
-                className="inline-flex items-center gap-2 px-7 py-3.5 bg-white/10 hover:bg-white/20 text-white font-semibold rounded-xl text-base border border-white/20 transition-all"
-              >
-                Sign In
-              </Link>
+              {user ? (
+                <Link
+                  to="/dashboard"
+                  className="inline-flex items-center gap-2 px-7 py-3.5 bg-green-500 hover:bg-green-400 text-white font-bold rounded-xl text-base shadow-lg shadow-green-900/30 transition-all hover:scale-105"
+                >
+                  Go to Dashboard →
+                </Link>
+              ) : (
+                <>
+                  <Link
+                    to="/signup"
+                    className="inline-flex items-center gap-2 px-7 py-3.5 bg-green-500 hover:bg-green-400 text-white font-bold rounded-xl text-base shadow-lg shadow-green-900/30 transition-all hover:scale-105"
+                  >
+                    Get Started Free →
+                  </Link>
+                  <Link
+                    to="/login"
+                    className="inline-flex items-center gap-2 px-7 py-3.5 bg-white/10 hover:bg-white/20 text-white font-semibold rounded-xl text-base border border-white/20 transition-all"
+                  >
+                    Sign In
+                  </Link>
+                </>
+              )}
             </div>
           </div>
         </div>
@@ -542,18 +688,29 @@ export function HomePage() {
                   Create a private competition with your group or join the public weekly draft.
                   Free to play, fun to win.
                 </p>
-                <Link
-                  to="/signup"
-                  className="block w-full text-center px-5 py-3 bg-gray-900 hover:bg-gray-700 text-white font-bold rounded-xl text-sm transition-colors"
-                >
-                  Create an Account →
-                </Link>
-                <Link
-                  to="/login"
-                  className="block w-full text-center mt-2 px-5 py-3 text-gray-500 hover:text-gray-900 text-sm font-medium transition-colors"
-                >
-                  Already have an account? Sign in
-                </Link>
+                {user ? (
+                  <Link
+                    to="/dashboard"
+                    className="block w-full text-center px-5 py-3 bg-gray-900 hover:bg-gray-700 text-white font-bold rounded-xl text-sm transition-colors"
+                  >
+                    Go to Dashboard →
+                  </Link>
+                ) : (
+                  <>
+                    <Link
+                      to="/signup"
+                      className="block w-full text-center px-5 py-3 bg-gray-900 hover:bg-gray-700 text-white font-bold rounded-xl text-sm transition-colors"
+                    >
+                      Create an Account →
+                    </Link>
+                    <Link
+                      to="/login"
+                      className="block w-full text-center mt-2 px-5 py-3 text-gray-500 hover:text-gray-900 text-sm font-medium transition-colors"
+                    >
+                      Already have an account? Sign in
+                    </Link>
+                  </>
+                )}
               </div>
             </div>
           </div>
@@ -583,10 +740,10 @@ export function HomePage() {
             Free to play. Takes 2 minutes to set up. Bragging rights last all week.
           </p>
           <Link
-            to="/signup"
+            to={user ? '/dashboard' : '/signup'}
             className="inline-flex items-center gap-2 px-8 py-4 bg-green-500 hover:bg-green-400 text-white font-bold rounded-xl text-base shadow-lg shadow-green-900/40 transition-all hover:scale-105"
           >
-            Start Playing Free →
+            {user ? 'Go to Dashboard →' : 'Start Playing Free →'}
           </Link>
         </div>
       </section>

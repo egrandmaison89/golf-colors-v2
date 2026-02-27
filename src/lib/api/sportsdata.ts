@@ -192,10 +192,39 @@ export async function getTournament(tournamentId: string) {
 
 /**
  * Get tournament leaderboard/scores
+ *
+ * WARNING: This endpoint returns DFS-scrambled fantasy data with our API subscription.
+ * Do NOT use TotalScore, Rank, Holes[].ToPar, Holes[].Score for real scoring.
+ * Use getPlayerRoundScores() for real scoring data.
+ *
+ * Still useful for:
+ * - TotalThrough (holes completed in current round — structural, not scrambled)
+ * - Tournament.Rounds[].IsRoundOver (round completion status)
+ * - IsWithdrawn, IsAlternate (player status flags)
  */
 export async function getTournamentLeaderboard(tournamentId: string) {
   const data = await apiRequest(`/Leaderboard/${tournamentId}`);
   await trackAPICall(`/Leaderboard/${tournamentId}`, 'leaderboard');
+  return data;
+}
+
+/**
+ * Get real player round scores for a tournament
+ *
+ * Returns REAL scoring data (not DFS-scrambled).
+ * - TotalScore: actual to-par integer (e.g. -9, +1)
+ * - TotalStrokes: actual total strokes
+ * - PlayerRoundScore[]: per-round data with Score, Par (for holes completed),
+ *   TeeTime, IsWithdrawn
+ *
+ * For partial rounds, Par = cumulative par for holes played so far,
+ * Score = cumulative strokes for holes played so far.
+ * A completed round has Par = course par (e.g. 71).
+ * A not-yet-started round has Par = 0, Score = 0.
+ */
+export async function getPlayerRoundScores(tournamentId: string) {
+  const data = await apiRequest(`/PlayerTournamentRoundScores/${tournamentId}`);
+  await trackAPICall(`/PlayerTournamentRoundScores/${tournamentId}`, 'round_scores');
   return data;
 }
 
@@ -226,7 +255,8 @@ export async function getGolfer(golferId: string) {
  * Implemented endpoints:
  * - GET /Tournaments - Returns array of tournament objects
  * - GET /Tournament/{tournamentId} - Returns single tournament details
- * - GET /Leaderboard/{tournamentId} - Returns tournament leaderboard/scores
+ * - GET /Leaderboard/{tournamentId} - Returns DFS-scrambled leaderboard (use for TotalThrough only)
+ * - GET /PlayerTournamentRoundScores/{tournamentId} - Returns REAL scoring data
  * - GET /Players - Returns array of player/golfer objects
  * - GET /Player/{playerId} - Returns single player/golfer details
  * 

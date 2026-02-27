@@ -43,12 +43,6 @@ export function CompetitionCard({ competition }: CompetitionCardProps) {
 
         <div className="flex items-center justify-between text-xs text-gray-400 pt-3 border-t border-gray-50">
           <span>👥 {count} participant{count !== 1 ? 's' : ''}</span>
-          {competition.draft_status === 'in_progress' && (
-            <span className="flex items-center gap-1 text-blue-600 font-medium">
-              <span className="w-1.5 h-1.5 rounded-full bg-blue-500 animate-pulse" />
-              Draft in progress
-            </span>
-          )}
         </div>
       </div>
     </Link>

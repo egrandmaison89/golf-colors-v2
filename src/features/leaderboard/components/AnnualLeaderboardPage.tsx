@@ -1,7 +1,8 @@
 /**
  * AnnualLeaderboardPage component
  *
- * Displays year-over-year rankings
+ * Displays year-over-year rankings for completed public competitions.
+ * Columns: Rank | Player | Wins | Played | Winnings | Bounties | Total
  */
 
 import { useState } from 'react';
@@ -22,6 +23,16 @@ const RANK_MEDALS: Record<number, string> = {
   3: '🥉',
 };
 
+/** Format a net dollar amount: green "+$X.XX" or red "-$X.XX" */
+function NetAmount({ value, className = '' }: { value: number; className?: string }) {
+  const positive = value >= 0;
+  return (
+    <span className={`font-semibold ${positive ? 'text-green-600' : 'text-red-500'} ${className}`}>
+      {positive ? '+' : '-'}${Math.abs(value).toFixed(2)}
+    </span>
+  );
+}
+
 export function AnnualLeaderboardPage() {
   const { user } = useAuth();
   const [year, setYear] = useState(CURRENT_YEAR);
@@ -33,7 +44,9 @@ export function AnnualLeaderboardPage() {
       <div className="flex justify-between items-start gap-4">
         <div>
           <h1 className="text-2xl font-bold text-gray-900">Annual Leaderboard</h1>
-          <p className="text-gray-500 text-sm mt-0.5">Year-over-year rankings based on total winnings.</p>
+          <p className="text-gray-500 text-sm mt-0.5">
+            Year-over-year rankings from completed public competitions.
+          </p>
         </div>
         <select
           value={year}
@@ -66,7 +79,9 @@ export function AnnualLeaderboardPage() {
         <div className="text-center py-16 bg-white rounded-2xl border border-gray-100">
           <p className="text-4xl mb-3">🏆</p>
           <p className="font-semibold text-gray-700 mb-1">No data yet for {year}</p>
-          <p className="text-gray-400 text-sm">Complete competitions to see annual rankings.</p>
+          <p className="text-gray-400 text-sm">
+            Rankings appear here automatically once public tournaments complete.
+          </p>
         </div>
       )}
 
@@ -81,52 +96,108 @@ export function AnnualLeaderboardPage() {
             <div className="flex-1 bg-yellow-400" />
           </div>
 
-          <table className="min-w-full">
-            <thead>
-              <tr className="border-b border-gray-100">
-                <th className="px-6 py-3.5 text-left text-xs font-semibold text-gray-400 uppercase tracking-wider">Rank</th>
-                <th className="px-6 py-3.5 text-left text-xs font-semibold text-gray-400 uppercase tracking-wider">Player</th>
-                <th className="px-6 py-3.5 text-right text-xs font-semibold text-gray-400 uppercase tracking-wider">Wins</th>
-                <th className="px-6 py-3.5 text-right text-xs font-semibold text-gray-400 uppercase tracking-wider">Played</th>
-                <th className="px-6 py-3.5 text-right text-xs font-semibold text-gray-400 uppercase tracking-wider">Winnings</th>
-              </tr>
-            </thead>
-            <tbody className="divide-y divide-gray-50">
-              {entries.map((entry, i) => {
-                const rank = i + 1;
-                const isMe = entry.user_id === user?.id;
-                return (
-                  <tr
-                    key={entry.id}
-                    className={isMe ? 'bg-green-50' : 'hover:bg-gray-50 transition-colors'}
-                  >
-                    <td className="px-6 py-4 whitespace-nowrap">
-                      <span className={`text-sm font-bold ${RANK_STYLES[rank] ?? 'text-gray-400'}`}>
-                        {RANK_MEDALS[rank] ?? rank}
-                      </span>
-                    </td>
-                    <td className="px-6 py-4 whitespace-nowrap">
-                      <span className={`text-sm font-semibold ${isMe ? 'text-green-700' : 'text-gray-900'}`}>
-                        {isMe ? 'You ✦' : 'Player'}
-                      </span>
-                    </td>
-                    <td className="px-6 py-4 whitespace-nowrap text-right">
-                      <span className="text-sm font-medium text-gray-900">{entry.competitions_won}</span>
-                    </td>
-                    <td className="px-6 py-4 whitespace-nowrap text-right">
-                      <span className="text-sm text-gray-500">{entry.total_competitions}</span>
-                    </td>
-                    <td className="px-6 py-4 whitespace-nowrap text-right">
-                      <span className={`text-sm font-semibold ${entry.total_winnings >= 0 ? 'text-green-600' : 'text-red-500'}`}>
-                        {entry.total_winnings >= 0 ? '+' : '-'}${Math.abs(entry.total_winnings).toFixed(2)}
-                      </span>
-                    </td>
-                  </tr>
-                );
-              })}
-            </tbody>
-          </table>
+          <div className="overflow-x-auto">
+            <table className="min-w-full">
+              <thead>
+                <tr className="border-b border-gray-100">
+                  <th className="px-4 py-3.5 text-left text-xs font-semibold text-gray-400 uppercase tracking-wider">
+                    Rank
+                  </th>
+                  <th className="px-4 py-3.5 text-left text-xs font-semibold text-gray-400 uppercase tracking-wider">
+                    Player
+                  </th>
+                  <th className="px-4 py-3.5 text-right text-xs font-semibold text-gray-400 uppercase tracking-wider">
+                    Wins
+                  </th>
+                  <th className="px-4 py-3.5 text-right text-xs font-semibold text-gray-400 uppercase tracking-wider">
+                    Played
+                  </th>
+                  <th className="px-4 py-3.5 text-right text-xs font-semibold text-gray-400 uppercase tracking-wider">
+                    Winnings
+                  </th>
+                  <th className="px-4 py-3.5 text-right text-xs font-semibold text-gray-400 uppercase tracking-wider">
+                    Bounties
+                  </th>
+                  <th className="px-4 py-3.5 text-right text-xs font-semibold text-gray-400 uppercase tracking-wider">
+                    Total
+                  </th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-gray-50">
+                {entries.map((entry, i) => {
+                  const rank = i + 1;
+                  const isMe = entry.user_id === user?.id;
+                  const total = entry.total_winnings + entry.total_bounties;
+                  // Use team_color as a left-border accent if available
+                  const accentStyle = entry.team_color
+                    ? { borderLeft: `3px solid ${entry.team_color}` }
+                    : {};
+
+                  return (
+                    <tr
+                      key={entry.id}
+                      style={accentStyle}
+                      className={isMe ? 'bg-green-50' : 'hover:bg-gray-50 transition-colors'}
+                    >
+                      {/* Rank */}
+                      <td className="px-4 py-4 whitespace-nowrap">
+                        <span className={`text-sm font-bold ${RANK_STYLES[rank] ?? 'text-gray-400'}`}>
+                          {RANK_MEDALS[rank] ?? rank}
+                        </span>
+                      </td>
+
+                      {/* Player name */}
+                      <td className="px-4 py-4 whitespace-nowrap">
+                        <span className={`text-sm font-semibold ${isMe ? 'text-green-700' : 'text-gray-900'}`}>
+                          {isMe
+                            ? 'You ✦'
+                            : (entry.display_name ?? 'Player')}
+                        </span>
+                      </td>
+
+                      {/* Wins */}
+                      <td className="px-4 py-4 whitespace-nowrap text-right">
+                        <span className="text-sm font-medium text-gray-900">
+                          {entry.competitions_won}
+                        </span>
+                      </td>
+
+                      {/* Played */}
+                      <td className="px-4 py-4 whitespace-nowrap text-right">
+                        <span className="text-sm text-gray-500">
+                          {entry.total_competitions}
+                        </span>
+                      </td>
+
+                      {/* Winnings (main competition net) */}
+                      <td className="px-4 py-4 whitespace-nowrap text-right">
+                        <NetAmount value={entry.total_winnings} className="text-sm" />
+                      </td>
+
+                      {/* Bounties (net bounty) */}
+                      <td className="px-4 py-4 whitespace-nowrap text-right">
+                        <NetAmount value={entry.total_bounties} className="text-sm" />
+                      </td>
+
+                      {/* Total */}
+                      <td className="px-4 py-4 whitespace-nowrap text-right">
+                        <NetAmount value={total} className="text-sm" />
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
         </div>
+      )}
+
+      {/* Legend */}
+      {!loading && !error && entries.length > 0 && (
+        <p className="text-xs text-gray-400 text-center">
+          Winnings = net main competition ($1/stroke). Bounties = net bounty winnings.
+          Total = Winnings + Bounties.
+        </p>
       )}
     </div>
   );

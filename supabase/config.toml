@@ -1,0 +1,16 @@
+# Supabase CLI configuration
+# This file ensures consistent settings across all `supabase functions deploy` runs.
+# Without it, the CLI defaults (e.g. verify_jwt=true) silently override the
+# project's live settings, which caused a production-breaking 401 on 2026-02-27.
+
+[project]
+id = "mjxygrbfvlrvhyjrepqq"
+
+# ─── Edge Functions ───────────────────────────────────────────────────────────
+
+[functions.sportsdata-proxy]
+# MUST be false — this proxy is called from the public homepage for
+# unauthenticated visitors. The edge function itself uses the service
+# role key for DB writes (snapshots, API usage tracking), so no
+# user-level auth is needed.
+verify_jwt = false

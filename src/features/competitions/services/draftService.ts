@@ -291,13 +291,17 @@ export async function makePick(
   // Check if draft is complete
   const totalPicks = order.length * 3;
   if (nextPickNumber >= totalPicks) {
-    await supabase
+    const { error: completeError } = await supabase
       .from('competitions')
       .update({
         draft_status: 'completed',
         draft_completed_at: new Date().toISOString(),
       })
       .eq('id', competitionId);
+
+    if (completeError) {
+      throw new Error(`Failed to complete draft: ${completeError.message}`);
+    }
   }
 }
 

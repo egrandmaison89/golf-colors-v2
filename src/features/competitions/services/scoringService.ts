@@ -8,7 +8,7 @@
 import { supabase } from '@/lib/supabase/client';
 import { getDraftPicks } from './draftService';
 import { getAlternates } from './draftService';
-import type { SportsDataLeaderboardEntry } from '@/features/tournaments/types';
+// SportsDataLeaderboardEntry type no longer used — we now use PlayerTournamentRoundScores endpoint
 
 export interface LeaderboardEntry {
   userId: string;
@@ -22,9 +22,16 @@ export interface LeaderboardEntry {
     golferName: string;
     scoreToPar: number | null;
     usedAlternate: boolean;
+    alternateGolferName: string | null;
     missedCut: boolean;
     withdrew: boolean;
   }[];
+  /** The team's selected alternate golfer (always shown, even if not activated) */
+  alternate: {
+    golferId: string;
+    golferName: string;
+    scoreToPar: number | null;
+  } | null;
 }
 
 interface TournamentResult {
@@ -39,20 +46,43 @@ interface TournamentResult {
 /**
  * Sync tournament results from SportsData.io into our tournament_results table.
  * Call this before getCompetitionLeaderboard when tournament is active or completed.
+ *
+ * Uses TWO API endpoints:
+ * - /PlayerTournamentRoundScores/{id}: REAL scoring data (TotalScore, TotalStrokes, per-round)
+ * - /Leaderboard/{id}: Tournament.Rounds[].IsRoundOver for cut detection
+ *
+ * The /Leaderboard endpoint returns DFS-scrambled scores — we only use it for structural
+ * metadata (IsRoundOver). All scoring comes from /PlayerTournamentRoundScores.
  */
 export async function syncTournamentResults(
   tournamentId: string,
   sportsdataId: string
 ): Promise<void> {
   try {
-    const { getTournamentLeaderboard } = await import('@/lib/api/sportsdata');
-    const apiData = await getTournamentLeaderboard(sportsdataId);
-    const entries = apiData as SportsDataLeaderboardEntry[];
+    const { getPlayerRoundScores, getTournamentLeaderboard } = await import('@/lib/api/sportsdata');
 
-    if (!Array.isArray(entries) || entries.length === 0) return;
+    // Fetch both endpoints in parallel
+    const [roundScoresRaw, leaderboardRaw] = await Promise.all([
+      getPlayerRoundScores(sportsdataId),
+      getTournamentLeaderboard(sportsdataId),
+    ]);
+
+    const players: any[] = Array.isArray(roundScoresRaw) ? roundScoresRaw : [];
+    if (players.length === 0) return;
+
+    // Determine current round from Leaderboard's Tournament.Rounds[].IsRoundOver
+    const tournamentRounds: any[] = (leaderboardRaw as any)?.Tournament?.Rounds ?? [];
+    let currentRound = 1;
+    for (const r of tournamentRounds) {
+      if (r.IsRoundOver === true) {
+        currentRound = Math.max(currentRound, (r.Number ?? 0) + 1);
+      }
+    }
+    currentRound = Math.min(currentRound, 4);
+    const cutHasBeenMade = currentRound >= 3;
 
     // Map sportsdata PlayerIDs to our internal golfer UUIDs
-    const playerIds = entries.map((e) => String(e.PlayerID));
+    const playerIds = players.map((p: any) => String(p.PlayerID));
     const { data: golfers } = await supabase
       .from('golfers')
       .select('id, sportsdata_id')
@@ -62,27 +92,62 @@ export async function syncTournamentResults(
 
     const golferMap = new Map(golfers.map((g) => [g.sportsdata_id, g.id]));
 
-    const rows = entries
-      .filter((e) => golferMap.has(String(e.PlayerID)))
-      .map((e) => {
-        const rounds = Array.isArray(e.Rounds)
-          ? e.Rounds.map((r) => ({ Round: r.Round, Score: r.Score, ToPar: r.ToPar ?? 0 }))
-          : null;
+    const rows: any[] = players
+      .filter((p: any) => golferMap.has(String(p.PlayerID)))
+      .map((p: any) => {
+        // TotalScore from PlayerTournamentRoundScores is the REAL to-par value.
+        // TotalStrokes is the REAL total strokes.
+        const totalToPar = p.TotalScore != null ? Math.round(p.TotalScore) : null;
+        const totalStrokes = p.TotalStrokes != null ? Math.round(p.TotalStrokes) : null;
+
+        // Build rounds summary from PlayerRoundScore[].
+        // Each round with Par > 0 has real data: ToPar = Score - Par.
+        const roundsSummary: { Round: number; ToPar: number }[] = [];
+        for (const r of (p.PlayerRoundScore ?? []) as any[]) {
+          if (r.Par > 0 && r.Score > 0) {
+            roundsSummary.push({ Round: r.Number, ToPar: r.Score - r.Par });
+          }
+        }
+
+        // Withdrawn: TotalScore is null (player never started or withdrew pre-tournament)
+        const withdrew = totalToPar === null;
+
+        // Made cut: only determinable after round 3+ begins.
+        // A player who made the cut will have round 3+ data with Par > 0.
+        const hasRound3Plus = (p.PlayerRoundScore ?? []).some(
+          (r: any) => r.Number >= 3 && r.Par > 0
+        );
+        const madeCut: boolean | null =
+          withdrew ? null :
+          cutHasBeenMade ? hasRound3Plus : null;
 
         return {
           tournament_id: tournamentId,
-          golfer_id: golferMap.get(String(e.PlayerID))!,
-          position: e.Position ?? null,
-          total_score: e.TotalStrokes ?? null,
-          total_to_par: e.TotalScore ?? null, // SportsData uses TotalScore for to-par value
-          rounds,
-          earnings: e.Earnings ?? null,
-          made_cut: e.MadeCut ?? null,
-          withdrew: e.Withdrew ?? false,
+          golfer_id: golferMap.get(String(p.PlayerID))!,
+          position: null as number | null, // assigned below after sorting
+          total_score: totalStrokes,
+          total_to_par: totalToPar,
+          rounds: roundsSummary.length > 0 ? roundsSummary : null,
+          earnings: null,
+          made_cut: madeCut,
+          withdrew,
         };
       });
 
     if (rows.length === 0) return;
+
+    // Assign positions by sorting non-withdrawn players by total_to_par ascending.
+    // Ties get the same position (e.g. T1, T1, 3, 4...).
+    const active = rows
+      .filter((r) => r.total_to_par !== null)
+      .sort((a, b) => a.total_to_par! - b.total_to_par!);
+    let pos = 1;
+    for (let i = 0; i < active.length; i++) {
+      if (i > 0 && active[i].total_to_par !== active[i - 1].total_to_par) {
+        pos = i + 1;
+      }
+      active[i].position = pos;
+    }
 
     await supabase
       .from('tournament_results')
@@ -118,6 +183,13 @@ export async function getCompetitionLeaderboard(
   const alternateByUser = new Map<string, string>();
   alternatesData.forEach((a) => alternateByUser.set(a.user_id, a.golfer_id));
 
+  // Build map of userId → alternate golfer display name (for UI labels)
+  const alternateGolferNameByUser = new Map<string, string>();
+  alternatesData.forEach((a: any) => {
+    const golfer = Array.isArray(a.golfers) ? a.golfers[0] : a.golfers;
+    alternateGolferNameByUser.set(a.user_id, golfer?.display_name ?? 'Unknown');
+  });
+
   const picksByUser = new Map<string, typeof picks>();
   picks.forEach((p) => {
     const list = picksByUser.get(p.user_id) || [];
@@ -147,6 +219,7 @@ export async function getCompetitionLeaderboard(
     const breakdown: LeaderboardEntry['scoreBreakdown'] = [];
     let teamScoreToPar = 0;
     let teamScoreStrokes = 0;
+    let alternateUsed = false; // Track per-user: each user's alternate can only be used once
 
     for (const pick of sortedPicks) {
       const result = resultsByGolfer.get(pick.golfer_id);
@@ -155,26 +228,28 @@ export async function getCompetitionLeaderboard(
       let missedCut = false;
       let withdrew = false;
 
-      if (result) {
-        if (result.withdrew) {
-          withdrew = true;
-          const altGolferId = alternateByUser.get(userId);
-          if (altGolferId) {
-            const altResult = resultsByGolfer.get(altGolferId);
-            if (altResult) {
-              scoreToPar = getEffectiveScoreToPar(altResult);
-              usedAlternate = true;
-            }
-          }
-          if (scoreToPar === null) {
-            scoreToPar = maxDraftedScore + 1;
-          }
-        } else if (result.made_cut === false) {
-          missedCut = true;
-          scoreToPar = getMissedCutScore(result);
-        } else {
-          scoreToPar = result.total_to_par ?? 0;
-        }
+      // Determine if this player is effectively "not playing":
+      //   - No tournament_results row at all (not in API Players array)
+      //   - Result exists but total_to_par is null AND not already flagged as
+      //     withdrew or missed-cut (player in API but never started playing)
+      const isEffectivelyWithdrawn =
+        !result ||
+        (result.total_to_par === null && !result.withdrew && result.made_cut !== false);
+
+      if (isEffectivelyWithdrawn || result?.withdrew) {
+        // Player withdrew or never started — apply alternate/penalty logic
+        withdrew = true;
+        const resolved = resolveWithdrawalScore(
+          userId, alternateByUser, resultsByGolfer, alternateUsed, maxDraftedScore
+        );
+        scoreToPar = resolved.scoreToPar;
+        usedAlternate = resolved.usedAlternate;
+        alternateUsed = resolved.alternateUsed;
+      } else if (result!.made_cut === false) {
+        missedCut = true;
+        scoreToPar = getMissedCutScore(result!);
+      } else {
+        scoreToPar = result!.total_to_par ?? 0;
       }
 
       if (scoreToPar !== null) {
@@ -185,12 +260,27 @@ export async function getCompetitionLeaderboard(
         golferName: pick.golfer?.display_name ?? 'Unknown',
         scoreToPar,
         usedAlternate,
+        alternateGolferName: usedAlternate
+          ? (alternateGolferNameByUser.get(userId) ?? null)
+          : null,
         missedCut,
         withdrew,
       });
 
       const strokes = result?.total_score;
       if (strokes != null) teamScoreStrokes += strokes;
+    }
+
+    // Build alternate info for display (always shown, even if not activated)
+    const altGolferId = alternateByUser.get(userId);
+    let alternate: LeaderboardEntry['alternate'] = null;
+    if (altGolferId) {
+      const altResult = resultsByGolfer.get(altGolferId);
+      alternate = {
+        golferId: altGolferId,
+        golferName: alternateGolferNameByUser.get(userId) ?? 'Unknown',
+        scoreToPar: altResult?.total_to_par ?? null,
+      };
     }
 
     entries.push({
@@ -201,6 +291,7 @@ export async function getCompetitionLeaderboard(
       teamScoreStrokes,
       finalPosition: 0,
       scoreBreakdown: breakdown,
+      alternate,
     });
   }
 
@@ -275,8 +366,42 @@ async function getTournamentResults(tournamentId: string): Promise<TournamentRes
   return (data as TournamentResult[]) || [];
 }
 
+/**
+ * Resolve the score for a withdrawn/non-playing drafted player.
+ * Tries to use the user's alternate (if available and not already consumed).
+ * Falls back to maxDraftedScore + 1 penalty if no alternate is available.
+ */
+function resolveWithdrawalScore(
+  userId: string,
+  alternateByUser: Map<string, string>,
+  resultsByGolfer: Map<string, TournamentResult>,
+  alternateUsed: boolean,
+  maxDraftedScore: number,
+): { scoreToPar: number; usedAlternate: boolean; alternateUsed: boolean } {
+  if (!alternateUsed) {
+    const altGolferId = alternateByUser.get(userId);
+    if (altGolferId) {
+      const altResult = resultsByGolfer.get(altGolferId);
+      // Only use the alternate if they are actually playing (not withdrawn, have a score)
+      if (altResult && !altResult.withdrew && altResult.total_to_par !== null) {
+        return {
+          scoreToPar: getEffectiveScoreToPar(altResult),
+          usedAlternate: true,
+          alternateUsed: true,
+        };
+      }
+    }
+  }
+  return {
+    scoreToPar: maxDraftedScore + 1,
+    usedAlternate: false,
+    alternateUsed,
+  };
+}
+
 function getEffectiveScoreToPar(result: TournamentResult): number {
-  if (result.withdrew) return 0;
+  // Note: caller should check result.withdrew and result.total_to_par before calling.
+  // This function is for players who ARE playing (not withdrawn, have data).
   if (result.made_cut === false) return getMissedCutScore(result);
   return result.total_to_par ?? 0;
 }
@@ -301,4 +426,171 @@ function getMaxDraftedScore(
     if (score > max) max = score;
   }
   return max;
+}
+
+// ============================================================================
+// FINALIZATION — persists final results when a tournament completes
+// ============================================================================
+
+/**
+ * Finalize a completed competition:
+ *   1. Idempotency guard — skips if competition_scores already exist
+ *   2. Calculate leaderboard
+ *   3. Calculate & persist bounties (via bountyService)
+ *   4. Persist main competition payments ($1/stroke differential)
+ *   5. Persist competition_scores (one row per user)
+ *   6. Upsert annual_leaderboard (net winnings + bounties for the year)
+ *
+ * Safe to call on every page load — the guard prevents double-counting.
+ */
+export async function finalizeCompetition(competitionId: string): Promise<void> {
+  try {
+    // 1. Idempotency guard
+    const { data: existingScores } = await supabase
+      .from('competition_scores')
+      .select('id')
+      .eq('competition_id', competitionId)
+      .limit(1);
+
+    if (existingScores && existingScores.length > 0) {
+      return; // Already finalized
+    }
+
+    // 2. Get leaderboard
+    const leaderboard = await getCompetitionLeaderboard(competitionId);
+    if (leaderboard.length === 0) return;
+
+    // 3. Calculate & persist bounties
+    const { calculateBounties } = await import('./bountyService');
+    const bountyResult = await calculateBounties(competitionId, leaderboard);
+
+    // 4. Calculate main competition payments ($1/stroke per loser)
+    const winners = leaderboard.filter((e) => e.finalPosition === 1);
+    const losers = leaderboard.filter((e) => e.finalPosition > 1);
+
+    // Net payments: map userId -> net amount (positive = received, negative = paid)
+    const netMainByUser = new Map<string, number>();
+    leaderboard.forEach((e) => netMainByUser.set(e.userId, 0));
+
+    if (winners.length > 0 && losers.length > 0) {
+      const winnerScore = winners[0].teamScoreToPar;
+
+      for (const loser of losers) {
+        const strokeDiff = loser.teamScoreToPar - winnerScore;
+        if (strokeDiff <= 0) continue;
+
+        // Each loser pays (strokeDiff / winnerCount) to each winner
+        const amountPerWinner = strokeDiff / winners.length;
+
+        for (const winner of winners) {
+          // Persist payment row
+          await supabase.from('competition_payments').upsert(
+            {
+              competition_id: competitionId,
+              from_user_id: loser.userId,
+              to_user_id: winner.userId,
+              amount: parseFloat(amountPerWinner.toFixed(2)),
+              payment_type: 'main_competition',
+            },
+            { onConflict: 'competition_id,from_user_id,to_user_id,payment_type' }
+          );
+
+          // Track net
+          netMainByUser.set(winner.userId, (netMainByUser.get(winner.userId) ?? 0) + amountPerWinner);
+          netMainByUser.set(loser.userId, (netMainByUser.get(loser.userId) ?? 0) - strokeDiff);
+        }
+      }
+    }
+
+    // 5. Persist competition_scores
+    const scoreRows = leaderboard.map((entry) => ({
+      competition_id: competitionId,
+      user_id: entry.userId,
+      team_score_strokes: entry.teamScoreStrokes,
+      team_score_to_par: entry.teamScoreToPar,
+      final_position: entry.finalPosition,
+      score_breakdown: entry.scoreBreakdown,
+      calculated_at: new Date().toISOString(),
+      updated_at: new Date().toISOString(),
+    }));
+
+    await supabase
+      .from('competition_scores')
+      .upsert(scoreRows, { onConflict: 'competition_id,user_id' });
+
+    // 6. Upsert annual_leaderboard
+    // Get tournament end_date to determine the year
+    const { data: competition } = await supabase
+      .from('competitions')
+      .select('tournament_id')
+      .eq('id', competitionId)
+      .single();
+
+    if (!competition) return;
+
+    const { data: tournament } = await supabase
+      .from('tournaments')
+      .select('end_date')
+      .eq('id', competition.tournament_id)
+      .single();
+
+    if (!tournament) return;
+
+    const year = new Date(tournament.end_date).getFullYear();
+
+    // Build bounty nets per user from bountyResult payments
+    const netBountyByUser = new Map<string, number>();
+    leaderboard.forEach((e) => netBountyByUser.set(e.userId, 0));
+
+    if (bountyResult) {
+      // Winner receives
+      netBountyByUser.set(
+        bountyResult.winnerUserId,
+        (netBountyByUser.get(bountyResult.winnerUserId) ?? 0) + bountyResult.totalBounty
+      );
+      // Each payer owes
+      for (const payment of bountyResult.payments) {
+        netBountyByUser.set(
+          payment.fromUserId,
+          (netBountyByUser.get(payment.fromUserId) ?? 0) - payment.amount
+        );
+      }
+    }
+
+    // Fetch existing annual_leaderboard rows for these users
+    const userIds = leaderboard.map((e) => e.userId);
+    const { data: existingRows } = await supabase
+      .from('annual_leaderboard')
+      .select('*')
+      .eq('year', year)
+      .in('user_id', userIds);
+
+    const existingByUser = new Map(
+      (existingRows ?? []).map((r) => [r.user_id, r])
+    );
+
+    const annualRows = leaderboard.map((entry) => {
+      const existing = existingByUser.get(entry.userId);
+      const netMain = netMainByUser.get(entry.userId) ?? 0;
+      const netBounty = netBountyByUser.get(entry.userId) ?? 0;
+      const won = entry.finalPosition === 1 ? 1 : 0;
+
+      return {
+        user_id: entry.userId,
+        year,
+        total_competitions: (existing?.total_competitions ?? 0) + 1,
+        competitions_won: (existing?.competitions_won ?? 0) + won,
+        total_winnings: parseFloat(((existing?.total_winnings ?? 0) + netMain).toFixed(2)),
+        total_bounties: parseFloat(((existing?.total_bounties ?? 0) + netBounty).toFixed(2)),
+        updated_at: new Date().toISOString(),
+      };
+    });
+
+    await supabase
+      .from('annual_leaderboard')
+      .upsert(annualRows, { onConflict: 'user_id,year' });
+  } catch (err) {
+    // Finalization failure should not break the UI
+    console.error('finalizeCompetition failed:', err);
+  }
 }

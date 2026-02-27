@@ -43,6 +43,7 @@ function ColorDot({ color }: { color: string | null | undefined }) {
 interface DraftSectionProps {
   competition: CompetitionWithDetails;
   onUpdate: () => void;
+  isParticipant: boolean;
 }
 
 interface UserProfile {
@@ -69,7 +70,7 @@ function formatOdds(odds: number | null): string {
   return `${numerator}/1`;
 }
 
-export function DraftSection({ competition, onUpdate }: DraftSectionProps) {
+export function DraftSection({ competition, onUpdate, isParticipant }: DraftSectionProps) {
   const { user } = useAuth();
   const isCreator = user?.id === competition.created_by;
 
@@ -90,6 +91,7 @@ export function DraftSection({ competition, onUpdate }: DraftSectionProps) {
   const [fieldGolfers, setFieldGolfers] = useState<TournamentGolferEntry[]>([]);
   const [fieldLoading, setFieldLoading] = useState(false);
   const [fieldSynced, setFieldSynced] = useState(false);
+  const [fieldError, setFieldError] = useState<string | null>(null);
 
   const pollingRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
@@ -119,6 +121,7 @@ export function DraftSection({ competition, onUpdate }: DraftSectionProps) {
       setFieldGolfers(field);
     } catch (e) {
       console.error('Failed to load tournament field:', e);
+      setFieldError('Failed to load tournament field. Please refresh the page.');
     } finally {
       setFieldLoading(false);
     }
@@ -457,7 +460,7 @@ export function DraftSection({ competition, onUpdate }: DraftSectionProps) {
           </div>
         </div>
 
-        {user && (
+        {isParticipant && (
           <div>
             <h4 className="text-xs font-semibold text-gray-500 uppercase tracking-wide mb-2">Alternate (Optional)</h4>
             <p className="text-sm text-gray-600 mb-3">Choose an alternate in case one of your picks withdraws.</p>
@@ -467,6 +470,9 @@ export function DraftSection({ competition, onUpdate }: DraftSectionProps) {
               <>
                 {alternateError && (
                   <div className="mb-3 rounded-md bg-red-50 p-3 text-sm text-red-800">{alternateError.message}</div>
+                )}
+                {fieldError && (
+                  <div className="mb-3 rounded-md bg-red-50 p-3 text-sm text-red-800">{fieldError}</div>
                 )}
                 <div className="flex items-center gap-2 mb-3">
                   <input
