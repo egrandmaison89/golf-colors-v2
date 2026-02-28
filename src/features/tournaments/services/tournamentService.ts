@@ -158,7 +158,11 @@ export async function getTournaments(forceRefresh = false): Promise<Tournament[]
       if (upsertError) {
         if (DEBUG) console.debug('[TournamentService] Upsert failed:', upsertError.message, upsertError);
         console.error('Error upserting tournaments:', upsertError);
-        // If we have cached data, return it; otherwise throw error
+        // Return API-fetched data even if DB write failed (e.g., RLS or connection issue)
+        if (tournamentsToUpsert.length > 0) {
+          console.warn('Returning API-fetched tournaments without DB cache (upsert failed).');
+          return tournamentsToUpsert as Tournament[];
+        }
         if (freshTournaments.length > 0) {
           return freshTournaments;
         }

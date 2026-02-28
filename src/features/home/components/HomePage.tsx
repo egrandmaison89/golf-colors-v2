@@ -209,7 +209,12 @@ function TournamentLeaderboard() {
         }
         currentRound = Math.min(currentRound, 4);
 
-        const cutHasBeenMade = currentRound >= 3;
+        // Only consider cut as made when at least one player has round 3+ data.
+        // This prevents false "MC" labels during the gap between R2 ending and R3 starting.
+        const anyoneHasRound3 = rsPlayers.some((p: any) =>
+          (p.PlayerRoundScore ?? []).some((r: any) => r.Number >= 3 && r.Par > 0)
+        );
+        const cutHasBeenMade = currentRound >= 3 && anyoneHasRound3;
 
         // Get course par from Tournament (or default to 72)
         const coursePar: number = lbData?.Tournament?.Par ?? 72;

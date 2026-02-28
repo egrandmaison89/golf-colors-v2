@@ -209,6 +209,24 @@ export async function getTournamentLeaderboard(tournamentId: string) {
 }
 
 /**
+ * Get basic leaderboard with authoritative MadeCut, IsWithdrawn, and Rank data
+ *
+ * Unlike the full /Leaderboard endpoint, /LeaderboardBasic provides reliable:
+ * - MadeCut: 1 (made cut) or 0 (missed cut)
+ * - IsWithdrawn: boolean
+ * - Rank: numeric position (null for MC/WD players)
+ * - TotalStrokes: real total strokes (available for MC players even when TotalScore is null)
+ *
+ * Note: TotalScore is null for MC players in this endpoint.
+ * Note: Tournament object only has TournamentID, Name, StartDate, EndDate, IsOver (no Par or Rounds).
+ */
+export async function getLeaderboardBasic(tournamentId: string) {
+  const data = await apiRequest(`/LeaderboardBasic/${tournamentId}`);
+  await trackAPICall(`/LeaderboardBasic/${tournamentId}`, 'leaderboard_basic');
+  return data;
+}
+
+/**
  * Get real player round scores for a tournament
  *
  * Returns REAL scoring data (not DFS-scrambled).
@@ -256,6 +274,7 @@ export async function getGolfer(golferId: string) {
  * - GET /Tournaments - Returns array of tournament objects
  * - GET /Tournament/{tournamentId} - Returns single tournament details
  * - GET /Leaderboard/{tournamentId} - Returns DFS-scrambled leaderboard (use for TotalThrough only)
+ * - GET /LeaderboardBasic/{tournamentId} - Returns authoritative MadeCut, IsWithdrawn, Rank
  * - GET /PlayerTournamentRoundScores/{tournamentId} - Returns REAL scoring data
  * - GET /Players - Returns array of player/golfer objects
  * - GET /Player/{playerId} - Returns single player/golfer details

@@ -52,38 +52,49 @@ interface TournamentResult {
  * Call this before getCompetitionLeaderboard when tournament is active or completed.
  *
  * Uses TWO API endpoints:
- * - /PlayerTournamentRoundScores/{id}: REAL scoring data (TotalScore, TotalStrokes, per-round)
- * - /Leaderboard/{id}: Tournament.Rounds[].IsRoundOver for cut detection
+ * - /PlayerTournamentRoundScores/{id}: REAL scoring data (TotalScore, TotalStrokes)
+ * - /LeaderboardBasic/{id}: Authoritative MadeCut, IsWithdrawn, Rank
  *
- * The /Leaderboard endpoint returns DFS-scrambled scores — we only use it for structural
- * metadata (IsRoundOver). All scoring comes from /PlayerTournamentRoundScores.
+ * Key facts:
+ * - TotalScore is null for MC players → we compute total_to_par from TotalStrokes - 2*coursePar
+ * - Per-round Score/Par from PlayerTournamentRoundScores are DFS-scrambled (don't use for scoring)
+ * - MadeCut, IsWithdrawn, Rank from LeaderboardBasic are authoritative (no inference needed)
  */
 export async function syncTournamentResults(
   tournamentId: string,
   sportsdataId: string
 ): Promise<void> {
   try {
-    const { getPlayerRoundScores, getTournamentLeaderboard } = await import('@/lib/api/sportsdata');
+    const { getPlayerRoundScores, getLeaderboardBasic } = await import('@/lib/api/sportsdata');
 
     // Fetch both endpoints in parallel
-    const [roundScoresRaw, leaderboardRaw] = await Promise.all([
+    const [roundScoresRaw, leaderboardBasicRaw] = await Promise.all([
       getPlayerRoundScores(sportsdataId),
-      getTournamentLeaderboard(sportsdataId),
+      getLeaderboardBasic(sportsdataId),
     ]);
 
     const players: any[] = Array.isArray(roundScoresRaw) ? roundScoresRaw : [];
     if (players.length === 0) return;
 
-    // Determine current round from Leaderboard's Tournament.Rounds[].IsRoundOver
-    const tournamentRounds: any[] = (leaderboardRaw as any)?.Tournament?.Rounds ?? [];
-    let currentRound = 1;
-    for (const r of tournamentRounds) {
-      if (r.IsRoundOver === true) {
-        currentRound = Math.max(currentRound, (r.Number ?? 0) + 1);
-      }
+    // Build metadata map from LeaderboardBasic (authoritative MadeCut, IsWithdrawn, Rank)
+    const lbPlayers: any[] = (leaderboardBasicRaw as any)?.Players ?? [];
+    const lbMeta = new Map<string, { madeCut: number; isWithdrawn: boolean; rank: number | null }>();
+    for (const lp of lbPlayers) {
+      lbMeta.set(String(lp.PlayerID), {
+        madeCut: lp.MadeCut ?? 0,
+        isWithdrawn: lp.IsWithdrawn ?? false,
+        rank: lp.Rank ?? null,
+      });
     }
-    currentRound = Math.min(currentRound, 4);
-    const cutHasBeenMade = currentRound >= 3;
+
+    // Extract course par from first completed round (Par values are real, not DFS-scrambled)
+    let coursePar = 72; // fallback
+    for (const p of players) {
+      for (const r of (p.PlayerRoundScore ?? []) as any[]) {
+        if (r.Number <= 2 && r.Par >= 60) { coursePar = r.Par; break; }
+      }
+      if (coursePar !== 72) break;
+    }
 
     // Map sportsdata PlayerIDs to our internal golfer UUIDs
     const playerIds = players.map((p: any) => String(p.PlayerID));
@@ -99,13 +110,23 @@ export async function syncTournamentResults(
     const rows: any[] = players
       .filter((p: any) => golferMap.has(String(p.PlayerID)))
       .map((p: any) => {
-        // TotalScore from PlayerTournamentRoundScores is the REAL to-par value.
-        // TotalStrokes is the REAL total strokes.
-        const totalToPar = p.TotalScore != null ? Math.round(p.TotalScore) : null;
-        const totalStrokes = p.TotalStrokes != null ? Math.round(p.TotalStrokes) : null;
+        // Get authoritative metadata from LeaderboardBasic
+        const meta = lbMeta.get(String(p.PlayerID));
+        const withdrew = meta?.isWithdrawn ?? false;
+        const madeCut: boolean | null = withdrew ? null
+          : meta ? (meta.madeCut === 1 ? true : false)
+          : null;
+        const position = meta?.rank ?? null;
 
-        // Build rounds summary from PlayerRoundScore[].
-        // Each round with Par > 0 has real data: ToPar = Score - Par.
+        // TotalScore (to-par) is null for MC players — compute from TotalStrokes
+        const totalStrokes = p.TotalStrokes != null ? Math.round(p.TotalStrokes) : null;
+        const totalToPar = p.TotalScore != null
+          ? Math.round(p.TotalScore)
+          : (totalStrokes != null && !withdrew)
+            ? totalStrokes - 2 * coursePar  // MC players: strokes - 2*par
+            : null;
+
+        // Build rounds summary (Note: per-round ToPar is DFS-scrambled — stored for reference only)
         const roundsSummary: { Round: number; ToPar: number }[] = [];
         for (const r of (p.PlayerRoundScore ?? []) as any[]) {
           if (r.Par > 0 && r.Score > 0) {
@@ -113,22 +134,10 @@ export async function syncTournamentResults(
           }
         }
 
-        // Withdrawn: TotalScore is null (player never started or withdrew pre-tournament)
-        const withdrew = totalToPar === null;
-
-        // Made cut: only determinable after round 3+ begins.
-        // A player who made the cut will have round 3+ data with Par > 0.
-        const hasRound3Plus = (p.PlayerRoundScore ?? []).some(
-          (r: any) => r.Number >= 3 && r.Par > 0
-        );
-        const madeCut: boolean | null =
-          withdrew ? null :
-          cutHasBeenMade ? hasRound3Plus : null;
-
         return {
           tournament_id: tournamentId,
           golfer_id: golferMap.get(String(p.PlayerID))!,
-          position: null as number | null, // assigned below after sorting
+          position,
           total_score: totalStrokes,
           total_to_par: totalToPar,
           rounds: roundsSummary.length > 0 ? roundsSummary : null,
@@ -139,19 +148,6 @@ export async function syncTournamentResults(
       });
 
     if (rows.length === 0) return;
-
-    // Assign positions by sorting non-withdrawn players by total_to_par ascending.
-    // Ties get the same position (e.g. T1, T1, 3, 4...).
-    const active = rows
-      .filter((r) => r.total_to_par !== null)
-      .sort((a, b) => a.total_to_par! - b.total_to_par!);
-    let pos = 1;
-    for (let i = 0; i < active.length; i++) {
-      if (i > 0 && active[i].total_to_par !== active[i - 1].total_to_par) {
-        pos = i + 1;
-      }
-      active[i].position = pos;
-    }
 
     await supabase
       .from('tournament_results')
@@ -263,11 +259,8 @@ export async function getCompetitionLeaderboard(
         missedCut = true;
         scoreToPar = getMissedCutScore(result!);
 
-        // Compute the pre-doubled 2-round total for explanation
-        const rounds = result!.rounds as { ToPar?: number }[] | null;
-        const twoRoundToPar = rounds && rounds.length >= 2
-          ? (rounds[0]?.ToPar ?? 0) + (rounds[1]?.ToPar ?? 0)
-          : result!.total_to_par ?? 0;
+        // total_to_par is the real 2-round to-par (computed during sync)
+        const twoRoundToPar = result!.total_to_par ?? 0;
         scoreExplanation = `${golferName} missed the cut after 2 rounds at ${fmtScore(twoRoundToPar)}. Their score is doubled to ${fmtScore(scoreToPar)} for this competition.`;
       } else {
         scoreToPar = result!.total_to_par ?? 0;
@@ -442,11 +435,8 @@ function getEffectiveScoreToPar(result: TournamentResult): number {
 }
 
 function getMissedCutScore(result: TournamentResult): number {
-  const rounds = result.rounds as { ToPar?: number }[] | null;
-  if (rounds && rounds.length >= 2) {
-    const twoRoundToPar = (rounds[0]?.ToPar ?? 0) + (rounds[1]?.ToPar ?? 0);
-    return twoRoundToPar * 2;
-  }
+  // MC players only played 2 rounds; total_to_par is their 2-round to-par
+  // (computed as TotalStrokes - 2*coursePar during sync). Double as penalty.
   return (result.total_to_par ?? 0) * 2;
 }
 
