@@ -149,9 +149,26 @@ export async function syncTournamentResults(
 
     if (rows.length === 0) return;
 
+    // Preserve admin manual overrides: skip rows where manual_override = true
+    const { data: overriddenRows } = await supabase
+      .from('tournament_results')
+      .select('golfer_id')
+      .eq('tournament_id', tournamentId)
+      .eq('manual_override', true);
+
+    const overriddenGolferIds = new Set(
+      (overriddenRows ?? []).map((r: { golfer_id: string }) => r.golfer_id)
+    );
+
+    const filteredRows = overriddenGolferIds.size > 0
+      ? rows.filter((r: any) => !overriddenGolferIds.has(r.golfer_id))
+      : rows;
+
+    if (filteredRows.length === 0) return;
+
     await supabase
       .from('tournament_results')
-      .upsert(rows, { onConflict: 'tournament_id,golfer_id' });
+      .upsert(filteredRows, { onConflict: 'tournament_id,golfer_id' });
   } catch (err) {
     console.error('syncTournamentResults failed:', err);
   }

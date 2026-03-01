@@ -23,6 +23,7 @@ import { syncTournamentField } from '@/features/golfers/services/golferService';
 import { supabase } from '@/lib/supabase/client';
 import { DraftSection } from './DraftSection';
 import { CompetitionTabs } from './CompetitionTabs';
+import { AdminPanel } from './AdminPanel';
 import { useState, useEffect, useCallback } from 'react';
 
 const STATUS_STYLES: Record<string, { badge: string; bar: string; label: string }> = {
@@ -550,8 +551,19 @@ export function CompetitionDetail() {
             <DraftSection competition={competition} onUpdate={refetch} isParticipant={isUserParticipant} />
           )}
 
-          {/* Competition tabs after draft completes */}
-          {competition.draft_status === 'completed' && isUserParticipant && competition.tournament && (
+          {/* Admin toolkit (post-draft) */}
+          {isAdmin && competition.draft_status === 'completed' && competition.tournament && user && (
+            <AdminPanel
+              competitionId={competition.id}
+              tournamentId={competition.tournament.id}
+              sportsdataId={sportsdataId}
+              adminUserId={user.id}
+              onDataChanged={refetch}
+            />
+          )}
+
+          {/* Competition tabs after draft completes (visible to participants AND admins) */}
+          {competition.draft_status === 'completed' && (isUserParticipant || isAdmin) && competition.tournament && (
             <CompetitionTabs
               competitionId={competition.id}
               tournamentId={competition.tournament.id}

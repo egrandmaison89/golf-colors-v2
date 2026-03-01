@@ -104,6 +104,7 @@ export interface Database {
           earnings: number | null;
           made_cut: boolean | null;
           withdrew: boolean | null;
+          manual_override: boolean;
           last_updated: string;
           created_at: string;
         };
@@ -118,6 +119,7 @@ export interface Database {
           earnings?: number | null;
           made_cut?: boolean | null;
           withdrew?: boolean | null;
+          manual_override?: boolean;
           last_updated?: string;
           created_at?: string;
         };
@@ -132,6 +134,7 @@ export interface Database {
           earnings?: number | null;
           made_cut?: boolean | null;
           withdrew?: boolean | null;
+          manual_override?: boolean;
           last_updated?: string;
           created_at?: string;
         };
@@ -408,6 +411,7 @@ export interface Database {
           total_competitions: number;
           competitions_won: number;
           total_winnings: number;
+          total_bounties: number;
           calculated_at: string;
           updated_at: string;
         };
@@ -418,6 +422,7 @@ export interface Database {
           total_competitions?: number;
           competitions_won?: number;
           total_winnings?: number;
+          total_bounties?: number;
           calculated_at?: string;
           updated_at?: string;
         };
@@ -428,6 +433,7 @@ export interface Database {
           total_competitions?: number;
           competitions_won?: number;
           total_winnings?: number;
+          total_bounties?: number;
           calculated_at?: string;
           updated_at?: string;
         };
